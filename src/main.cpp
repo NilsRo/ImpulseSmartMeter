@@ -311,7 +311,7 @@ void handleRoot()
 
   s += "<fieldset id=\"status\">";
   s += "<legend>Status</legend>";
-  s += "<p>Impulse Counter: ";
+  s += "<p>impulse counter: ";
   s += impulseCounted;
   s += "<p>consumption: ";
   s += float(impulseCounted) * impulseMultiplierParam.value();
