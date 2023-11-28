@@ -435,6 +435,21 @@ void updateTime()
   if (iotWebConf.getState() == 4)
   {
     timeClient.update();
+    sgetLocalTime();
+  }
+}
+
+void updateTimeNvs()
+{
+  if (iotWebConf.getState() == 4)
+  {
+    if (timeClient.update())
+    {
+      unsigned long epochTime =  timeClient.getEpochTime();
+      #TODO Check einbauen und update des NVRAM
+      if 
+      preferences.putULong("epochTime", epochTime);
+    }
     getLocalTime();
   }
 }
