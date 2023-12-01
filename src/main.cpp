@@ -30,7 +30,8 @@ unsigned int mqttImpulseCounted = 0;
 unsigned int nvsImpulseCounted = 0;
 bool impulsePinState = false;
 bool needReset = false;
-bool heartbeatError = false;
+byte heartbeatError = 0;
+byte mqttHeartbeatError = 0;
 char impulseUnit[STRING_LEN];
 
 // For a cloud MQTT broker, type the domain name
@@ -317,11 +318,24 @@ void handleRoot()
   s += impulseCounted;
   s += "<p>consumption: ";
   s += float(impulseCounted) * impulseMultiplierParam.value();
-  s += impulseUnit;  
+  s += impulseUnit;
   uptime::calculateUptime();
   sprintf(tempStr, "%04u Tage %02u:%02u:%02u", uptime::getDays(), uptime::getHours(), uptime::getMinutes(), uptime::getSeconds());
   s += "<p>uptime: " + String(tempStr);
   s += "<p>last reset reason: " + verbose_print_reset_reason(esp_reset_reason());
+  s += "<p>heartbeat: ";
+  switch (heartbeatError)
+  {
+  case 0:  
+    s += "unchecked";
+    break;
+  case 1:  
+    s += "downtime too long";
+    break;
+  case 2: 
+    s += "heartbeat ok";
+    break;
+  }
   s += "<p>";
   switch (esp_core_dump_image_check())
   {
@@ -376,6 +390,8 @@ void configSaved()
 
   impulseCounted = atol(impulseCountedStr);
   saveImpulseToNvs();
+  heartbeatError = 1;
+  preferences.putULong("heartbeat", timeClient.getEpochTime());
 
   //restart MQTT connection
   mqttClient.disconnect();
@@ -385,8 +401,8 @@ void configSaved()
   Serial.println("MQTT ready");
   connectToMqtt();
   
-  //reestart NTP connection
-  // configure the timezone
+  //restart NTP connection
+  //configure the timezone
   configTime(0, 0, ntpServer);
   setTimezone(ntpTimezone);
   Serial.println("NTP ready");
@@ -572,23 +588,36 @@ void mqttSendTopics(bool mqttInit)
     sprintf(msg_out, "%.2f", value);
     mqttPublish(MQTT_PUB_VALUE_OUT1, msg_out);
   }
+
+  if (heartbeatError != mqttHeartbeatError || mqttInit)
+  {
+    if (timeClient.isTimeSet())
+    {
+      switch (heartbeatError)
+      {
+      case 1:  
+        strcpy(msg_out, "ok");
+      case 2:  
+        strcpy(msg_out, "error");
+      }
+      mqttHeartbeatError = heartbeatError;
+      mqttPublish(MQTT_PUB_HEARTBEAT, msg_out);
+    }
+  }
+
   if (mqttInit)
     mqttPublishUptime();
-    if (heartbeatError)
-      strcpy(msg_out, "error");
-    else
-      strcpy(msg_out, "ok");
-    mqttPublish(MQTT_PUB_HEARTBEAT, msg_out);
 }
 
 void onSec10Timer()
 {
-
   //check heartbeat and set errorstate
   if (timeClient.isTimeSet() && preferences.isKey("heartbeat"))
   {
     if (timeClient.getEpochTime() - preferences.getULong("heartbeat") > 1200)   //20 Minuten ausgeschaltet führt zum Fehler
-      heartbeatError = true;
+      heartbeatError = 2;
+    else
+      heartbeatError = 1;
   }
 
   mqttSendTopics();
@@ -600,7 +629,7 @@ void onMin10Timer()
   saveImpulseToNvs();
   
   //heartbeat - save NTP time in NVS
-  if (timeClient.isTimeSet())
+  if (timeClient.isTimeSet() && heartbeatError < 2)
     preferences.putULong("heartbeat", timeClient.getEpochTime());
 }
 
