@@ -13,6 +13,7 @@ There are some projects included tasmota that provided impulse counters but I de
 ## [Hardware](docs/schema.pdf)
 * MH-ET Live D1 mini ESP32
 * STL for [case (thingiverse)](https://www.thingiverse.com/thing:4871082)
+* Reedsensor has to be connected to ground and GPIO 27 (can be changed in the constants, every digital GPIO can be used)
 * [sensor case for Pietro Florentini/Samgas meters](docs/Gaszaehler_Halter.stl)
 
 ## Mounting
@@ -26,7 +27,7 @@ You can compile your own firmware version or use the firmware provided in the re
 2. MQTT configuration (optional)
    1. publish the following topics (folder structure can be changed):
       * "ht/gas/imp_counted": actual impulse count
-      * #TODO: "ht/gas/status": status like online, error,...
+      * #TODO: "ht/gas/heartbeat": status like online, error,...
 3. NTP configuration to get RTC infos for logging (default is fine for german timezone)
 
 ![status page](img/opera_2023-11-27%20212528.png)

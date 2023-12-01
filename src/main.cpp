@@ -30,6 +30,7 @@ unsigned int mqttImpulseCounted = 0;
 unsigned int nvsImpulseCounted = 0;
 bool impulsePinState = false;
 bool needReset = false;
+bool heartbeatError = false;
 char impulseUnit[STRING_LEN];
 
 // For a cloud MQTT broker, type the domain name
@@ -37,6 +38,7 @@ char impulseUnit[STRING_LEN];
 #define MQTT_PORT 1883
 #define MQTT_PUB_IMPULSE_OUT1 "imp_counted_1"
 #define MQTT_PUB_VALUE_OUT1 "imp_value_1"
+#define MQTT_PUB_HEARTBEAT "heartbeat"
 #define MQTT_PUB_INFO "info"
 #define MQTT_PUB_STATUS "status"
 AsyncMqttClient mqttClient;
@@ -390,8 +392,6 @@ void configSaved()
   Serial.println("NTP ready");
 
   Serial.println("Configuration saved.");
-  // TODO: Neustart bei normalen Parametern vermeiden
-  // needReset = true;
 }
 
 bool formValidator(iotwebconf::WebRequestWrapper *webRequestWrapper)
@@ -435,25 +435,9 @@ void updateTime()
   if (iotWebConf.getState() == 4)
   {
     timeClient.update();
-    sgetLocalTime();
-  }
-}
-
-void updateTimeNvs()
-{
-  if (iotWebConf.getState() == 4)
-  {
-    if (timeClient.update())
-    {
-      unsigned long epochTime =  timeClient.getEpochTime();
-      #TODO Check einbauen und update des NVRAM
-      if 
-      preferences.putULong("epochTime", epochTime);
-    }
     getLocalTime();
   }
 }
-
 
 //-- SECTION: connection handling
 void connectToMqtt()
@@ -590,11 +574,23 @@ void mqttSendTopics(bool mqttInit)
   }
   if (mqttInit)
     mqttPublishUptime();
+    if (heartbeatError)
+      strcpy(msg_out, "error");
+    else
+      strcpy(msg_out, "ok");
+    mqttPublish(MQTT_PUB_HEARTBEAT, msg_out);
 }
 
 void onSec10Timer()
 {
-  updateTime();
+
+  //check heartbeat and set errorstate
+  if (timeClient.isTimeSet() && preferences.isKey("heartbeat"))
+  {
+    if (timeClient.getEpochTime() - preferences.getULong("heartbeat") > 1200)   //20 Minuten ausgeschaltet führt zum Fehler
+      heartbeatError = true;
+  }
+
   mqttSendTopics();
 }
 
@@ -602,6 +598,10 @@ void onMin10Timer()
 {
   mqttPublishUptime();
   saveImpulseToNvs();
+  
+  //heartbeat - save NTP time in NVS
+  if (timeClient.isTimeSet())
+    preferences.putULong("heartbeat", timeClient.getEpochTime());
 }
 
 void setup()
@@ -727,6 +727,7 @@ void loop()
 {
   iotWebConf.doLoop();
   ArduinoOTA.handle();
+  updateTime();
 
   if (needReset)
   {
