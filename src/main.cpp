@@ -65,7 +65,7 @@ time_t now;
 struct tm localTime;
 
 char hostname[STRING_LEN];
-#define CONFIG_VERSION "3"
+#define CONFIG_VERSION "2"
 Preferences preferences;
 int iotWebConfPinState = HIGH;
 unsigned long iotWebConfPinChanged = 0;
