@@ -593,20 +593,20 @@ void mqttSendTopics(bool mqttInit)
 
   if (heartbeatError != mqttHeartbeatError || mqttInit)
   {
-    if (timeClient.isTimeSet())
+    switch (heartbeatError)
     {
-      switch (heartbeatError)
-      {
-      case 0:
-        strcpy(msg_out, "unchecked");
-      case 1:
-        strcpy(msg_out, "ok");
-      case 2:
-        strcpy(msg_out, "downtime too long");
-      }
-      mqttHeartbeatError = heartbeatError;
-      mqttPublish(MQTT_PUB_HEARTBEAT, msg_out);
+    case 0:
+      strcpy(msg_out, "unchecked");
+      break;
+    case 1:
+      strcpy(msg_out, "ok");
+      break;
+    case 2:
+      strcpy(msg_out, "downtime too long");
+      break;
     }
+    mqttHeartbeatError = heartbeatError;
+    mqttPublish(MQTT_PUB_HEARTBEAT, msg_out);
   }
 
   if (mqttInit)
