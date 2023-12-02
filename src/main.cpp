@@ -40,6 +40,7 @@ char impulseUnit[STRING_LEN];
 #define MQTT_PUB_IMPULSE_OUT1 "imp_counted_1"
 #define MQTT_PUB_VALUE_OUT1 "imp_value_1"
 #define MQTT_PUB_HEARTBEAT "heartbeat"
+#define MQTT_PUB_DOWNTIME "downtime"
 #define MQTT_PUB_INFO "info"
 #define MQTT_PUB_STATUS "status"
 AsyncMqttClient mqttClient;
@@ -64,7 +65,7 @@ time_t now;
 struct tm localTime;
 
 char hostname[STRING_LEN];
-#define CONFIG_VERSION "2"
+#define CONFIG_VERSION "3"
 Preferences preferences;
 int iotWebConfPinState = HIGH;
 unsigned long iotWebConfPinChanged = 0;
@@ -86,7 +87,6 @@ IotWebConfTextParameter impulseUnitParam = IotWebConfTextParameter("unit", "impu
 iotwebconf::FloatTParameter impulseMultiplierParam = iotwebconf::Builder<iotwebconf::FloatTParameter>("impulseMultiplierParam").label("multiplier").defaultValue(1.0).step(0.01).placeholder("e.g. 23.4").build();
 IotWebConfNumberParameter impulseCountedParam = IotWebConfNumberParameter("impulses counted", "impulseCounted", impulseCountedStr, 10, "0");
 
-
 // -- SECTION: Common functions
 int mod(int x, int y)
 {
@@ -102,13 +102,13 @@ void mqttSendTopics(bool mqttInit = false);
 //--
 
 void saveImpulseToNvs()
-{  
-  if (nvsImpulseCounted != impulseCounted) {
+{
+  if (nvsImpulseCounted != impulseCounted)
+  {
     nvsImpulseCounted = impulseCounted;
     preferences.putUInt("impulseCounter", nvsImpulseCounted);
   }
 }
-
 
 // -- SECTION: Wifi Manager
 String verbose_print_reset_reason(esp_reset_reason_t reason)
@@ -279,7 +279,7 @@ void handleRoot()
 
   String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
   s += iotWebConf.getHtmlFormatProvider()->getStyle();
-  s += "<title>Warmwater Recirculation Pump</title>";
+  s += "<title>Impulsemeter</title>";
   s += iotWebConf.getHtmlFormatProvider()->getHeadEnd();
   s += "<fieldset id=" + String(mqttGroup.getId()) + ">";
   s += "<legend>" + String(mqttGroup.label) + "</legend>";
@@ -326,14 +326,14 @@ void handleRoot()
   s += "<p>heartbeat: ";
   switch (heartbeatError)
   {
-  case 0:  
+  case 0:
     s += "unchecked";
     break;
-  case 1:  
-    s += "downtime too long";
+  case 1:
+    s += "ok";
     break;
-  case 2: 
-    s += "heartbeat ok";
+  case 2:
+    s += "downtime too long";
     break;
   }
   s += "<p>";
@@ -360,49 +360,53 @@ void handleRoot()
 
 void configSaved()
 {
-  //check if Wifi configration has changed - if yes, restart
-    if (preferences.isKey("apPassword"))
-    {
-      if (strcmp(iotWebConf.getApPasswordParameter()->valueBuffer, preferences.getString("apPassword").c_str()) != 0)
-        needReset = true;
-    }
-    else
+  // check if Wifi configration has changed - if yes, restart
+  if (preferences.isKey("apPassword"))
+  {
+    if (strcmp(iotWebConf.getApPasswordParameter()->valueBuffer, preferences.getString("apPassword").c_str()) != 0)
       needReset = true;
-    if (preferences.isKey("wifiSsid"))
-    {
-      if (strcmp(iotWebConf.getWifiSsidParameter()->valueBuffer, preferences.getString("wifiSsid").c_str()) !=0)
-        needReset = true;
-    }
-    else
+  }
+  else
+    needReset = true;
+  if (preferences.isKey("wifiSsid"))
+  {
+    if (strcmp(iotWebConf.getWifiSsidParameter()->valueBuffer, preferences.getString("wifiSsid").c_str()) != 0)
       needReset = true;
+  }
+  else
+    needReset = true;
 
-    if (preferences.isKey("wifiPassword"))
-    {
-      if (strcmp(iotWebConf.getWifiPasswordParameter()->valueBuffer, preferences.getString("wifiPassword").c_str()) != 0)
-        needReset = true;
-    }
-    else
+  if (preferences.isKey("wifiPassword"))
+  {
+    if (strcmp(iotWebConf.getWifiPasswordParameter()->valueBuffer, preferences.getString("wifiPassword").c_str()) != 0)
       needReset = true;
+  }
+  else
+    needReset = true;
 
-  preferences.putString("apPassword", String(iotWebConf.getApPasswordParameter()->valueBuffer));
+  if (iotWebConf.getApPasswordParameter()->getLength() > 0)
+    preferences.putString("apPassword", String(iotWebConf.getApPasswordParameter()->valueBuffer));
   preferences.putString("wifiSsid", String(iotWebConf.getWifiAuthInfo().ssid));
   preferences.putString("wifiPassword", String(iotWebConf.getWifiAuthInfo().password));
 
   impulseCounted = atol(impulseCountedStr);
   saveImpulseToNvs();
-  heartbeatError = 1;
-  preferences.putULong("heartbeat", timeClient.getEpochTime());
+  if (timeClient.isTimeSet())
+  {
+    heartbeatError = 1;
+    preferences.putULong("heartbeat", timeClient.getEpochTime());
+  }
 
-  //restart MQTT connection
+  // restart MQTT connection
   mqttClient.disconnect();
   if (mqttUser != "")
     mqttClient.setCredentials(mqttUser, mqttPassword);
   mqttClient.setServer(mqttServer, MQTT_PORT);
   Serial.println("MQTT ready");
   connectToMqtt();
-  
-  //restart NTP connection
-  //configure the timezone
+
+  // restart NTP connection
+  // configure the timezone
   configTime(0, 0, ntpServer);
   setTimezone(ntpTimezone);
   Serial.println("NTP ready");
@@ -425,7 +429,6 @@ bool formValidator(iotwebconf::WebRequestWrapper *webRequestWrapper)
   return valid;
 }
 
-
 //-- SECTION: NTP
 void setTimezone(String timezone)
 {
@@ -433,7 +436,6 @@ void setTimezone(String timezone)
   setenv("TZ", ntpTimezone, 1); //  Now adjust the TZ.  Clock settings are adjusted to show the new local time
   tzset();
 }
-
 
 void getLocalTime()
 {
@@ -470,14 +472,14 @@ void onWifiConnected()
   Serial.println("Connected to Wi-Fi.");
   Serial.println(WiFi.localIP());
   connectToMqtt();
-  ArduinoOTA.begin();  
+  ArduinoOTA.begin();
 }
 
 void onWifiDisconnect(WiFiEvent_t event, WiFiEventInfo_t info)
 {
   Serial.println("Disconnected from Wi-Fi.");
   mqttReconnectTimer.detach(); // ensure we don't reconnect to MQTT while reconnecting to Wi-Fi
-  // ArduinoOTA.end();  
+  // ArduinoOTA.end();
 }
 
 void onMqttConnect(bool sessionPresent)
@@ -595,10 +597,12 @@ void mqttSendTopics(bool mqttInit)
     {
       switch (heartbeatError)
       {
-      case 1:  
+      case 0:
+        strcpy(msg_out, "unchecked");
+      case 1:
         strcpy(msg_out, "ok");
-      case 2:  
-        strcpy(msg_out, "error");
+      case 2:
+        strcpy(msg_out, "downtime too long");
       }
       mqttHeartbeatError = heartbeatError;
       mqttPublish(MQTT_PUB_HEARTBEAT, msg_out);
@@ -611,26 +615,37 @@ void mqttSendTopics(bool mqttInit)
 
 void onSec10Timer()
 {
-  //check heartbeat and set errorstate
-  if (timeClient.isTimeSet() && preferences.isKey("heartbeat"))
+  // check heartbeat and set errorstate - check onetime if NTP is available the first time
+  if (timeClient.isTimeSet() && heartbeatError == 0 && preferences.isKey("heartbeat"))
   {
-    if (timeClient.getEpochTime() - preferences.getULong("heartbeat") > 1200)   //20 Minuten ausgeschaltet führt zum Fehler
+    Serial.print("heartbeat: ");
+    Serial.println(preferences.getULong("heartbeat"));
+    if (timeClient.getEpochTime() - preferences.getULong("heartbeat") > (600 + (millis() / 1000))) // 10 minutes offline leads into an error
       heartbeatError = 2;
     else
       heartbeatError = 1;
+    char msg_out[20];
+    sprintf(msg_out, "%d", timeClient.getEpochTime() - preferences.getULong("heartbeat") - (millis() / 1000));
+    Serial.print("difference: ");
+    Serial.println(msg_out);
+    mqttPublish(MQTT_PUB_DOWNTIME, msg_out);
   }
 
   mqttSendTopics();
 }
 
-void onMin10Timer()
+void onMin5Timer()
 {
   mqttPublishUptime();
   saveImpulseToNvs();
-  
-  //heartbeat - save NTP time in NVS
-  if (timeClient.isTimeSet() && heartbeatError < 2)
+
+  // heartbeat - save NTP time in NVS
+  if (timeClient.isTimeSet() && (heartbeatError == 1 || !preferences.isKey("heartbeat")))
+  {
+    Serial.print("heartbeat saved: ");
+    Serial.println(timeClient.getEpochTime());
     preferences.putULong("heartbeat", timeClient.getEpochTime());
+  }
 }
 
 void setup()
@@ -640,7 +655,7 @@ void setup()
   esp_core_dump_init();
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(IMPULSEPIN, INPUT_PULLUP);
-  impulsePinState = digitalRead(IMPULSEPIN); //inimt PIN state
+  impulsePinState = digitalRead(IMPULSEPIN); // init PIN state
   digitalWrite(LED_BUILTIN, LOW);
 
   // WiFi.onEvent(onWifiConnected, ARDUINO_EVENT_WIFI_STA_CONNECTED);
@@ -684,26 +699,25 @@ void setup()
     if (preferences.isKey("apPassword"))
       strncpy(iotWebConf.getApPasswordParameter()->valueBuffer, preferences.getString("apPassword").c_str(), iotWebConf.getApPasswordParameter()->getLength());
     else
-      String("AP Password not found for restauration.");
+      Serial.println("AP Password not found for restauration.");
     if (preferences.isKey("wifiSsid"))
       strncpy(iotWebConf.getWifiSsidParameter()->valueBuffer, preferences.getString("wifiSsid").c_str(), iotWebConf.getWifiSsidParameter()->getLength());
     else
-      String("WiFi SSID not found for restauration.");
+      Serial.println("WiFi SSID not found for restauration.");
     if (preferences.isKey("wifiPassword"))
       strncpy(iotWebConf.getWifiPasswordParameter()->valueBuffer, preferences.getString("wifiPassword").c_str(), iotWebConf.getWifiPasswordParameter()->getLength());
     else
-      String("WiFi Password not found for restauration.");
+      Serial.println("WiFi Password not found for restauration.");
     iotWebConf.saveConfig();
     iotWebConf.resetWifiAuthInfo();
-  } 
-  
+  }
+
   // -- Set up required URL handlers on the web server.
   server.on("/", handleRoot);
   server.on("/config", []
-            { 
+            {
               itoa(impulseCounted, impulseCountedStr, 10);
-              iotWebConf.handleConfig(); 
-            });
+              iotWebConf.handleConfig(); });
   server.onNotFound([]()
                     { iotWebConf.handleNotFound(); });
   server.on("/coredump", handleCoreDump);
@@ -749,7 +763,7 @@ void setup()
 
   // Timers
   sec10Timer.attach(10, onSec10Timer);
-  min10Timer.attach(600, onMin10Timer);
+  min10Timer.attach(300, onMin5Timer);
 }
 
 void loop()

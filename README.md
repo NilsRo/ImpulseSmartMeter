@@ -8,7 +8,7 @@ There are some projects included tasmota that provided impulse counters but I de
 * Realtime clock for logging
 * Guided setup to avoid storing WiFi password, etc. in the code
 * NVRAM backup of the actual value
-* #TODO: error message of it was offline longer than 10 minutes with realtime clock (NTP)
+* error message of it was offline longer than 10 minutes with realtime clock (NTP)
 
 ## [Hardware](docs/schema.pdf)
 * MH-ET Live D1 mini ESP32
@@ -17,7 +17,7 @@ There are some projects included tasmota that provided impulse counters but I de
 * [sensor case for Pietro Florentini/Samgas meters](docs/Gaszaehler_Halter.stl)
 
 ## Mounting
-The reed sensor has to be mounted near to the magnet. For Pietro Florentini/Samgas meters I included as sensor mount. The sensor has to be placed near to the outer wall of the mechanical counter, below the lowest red number.
+The reed sensor has to be mounted near to the magnet. For Pietro Florentini/Samgas meters I included a STL to mount the reed sensor. It has to be placed near to the outer wall of the mechanical counter, below the lowest red number.
 
 # Software
 On first boot the thing opens an Access Point named "Gaszaehler" to provide the setup interface. The interface is still available after the device is connected so you can change everything later. 
@@ -27,7 +27,8 @@ You can compile your own firmware version or use the firmware provided in the re
 2. MQTT configuration (optional)
    1. publish the following topics (folder structure can be changed):
       * "ht/gas/imp_counted": actual impulse count
-      * #TODO: "ht/gas/heartbeat": status like online, error,...
+      * "ht/gas/heartbeat": status if the device was more than 10 minutes offline
+      * "ht/gas/downtime": number of seconds the thing was switched off
 3. NTP configuration to get RTC infos for logging (default is fine for german timezone)
 
 ![status page](img/opera_2023-11-27%20212528.png)
