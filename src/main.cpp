@@ -652,7 +652,7 @@ void setup()
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(IMPULSEPIN, INPUT_PULLUP);
   impulsePinState = digitalRead(IMPULSEPIN); // init PIN state
-  digitalWrite(LED_BUILTIN, LOW);
+  digitalWrite(LED_BUILTIN, HIGH);
 
   // WiFi.onEvent(onWifiConnected, ARDUINO_EVENT_WIFI_STA_CONNECTED);
   WiFi.onEvent(onWifiDisconnect, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
@@ -760,6 +760,7 @@ void setup()
   // Timers
   sec10Timer.attach(10, onSec10Timer);
   min10Timer.attach(300, onMin5Timer);
+  digitalWrite(LED_BUILTIN, LOW);
 }
 
 void loop()
