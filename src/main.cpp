@@ -50,7 +50,6 @@ char mqttServer[STRING_LEN];
 char mqttUser[STRING_LEN];
 char mqttPassword[STRING_LEN];
 char mqttTopicPath[STRING_LEN];
-String mqttStatus = "";
 
 Ticker mqttReconnectTimer;
 Ticker secTimer;
@@ -488,7 +487,6 @@ void onMqttConnect(bool sessionPresent)
   Serial.print("Session present: ");
   Serial.println(sessionPresent);
   uint16_t packetIdSub;
-  digitalWrite(LED_BUILTIN, HIGH);
   mqttSendTopics(true);
 }
 
@@ -518,8 +516,6 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
   strftime(mqttDisconnectTime, 40, "%d.%m.%Y %T", &localTime);
 
   Serial.printf(" [%8u] Disconnected from the broker reason = %s\n", millis(), mqttDisconnectReason.c_str());
-  digitalWrite(LED_BUILTIN, LOW);
-
   if (WiFi.isConnected())
   {
     Serial.printf(" [%8u] Reconnecting to MQTT..\n", millis());
@@ -786,7 +782,7 @@ void loop()
   {
     impulsePinState = 1 - impulsePinState; // invert pin state as it is changed
     impulsePinChanged = now;
-    // digitalWrite(LED_BUILTIN, HIGH);
+    digitalWrite(LED_BUILTIN, HIGH);
 
     if (impulsePinState) // button pressed action - set pressed time
     {
@@ -802,7 +798,7 @@ void loop()
       sprintf(msg_out, "Impulse released: %06u", timeReleased - timeDetected);
       mqttPublish(MQTT_PUB_INFO, msg_out);
       impulseCounted++;
-      // digitalWrite(LED_BUILTIN, LOW);
+      digitalWrite(LED_BUILTIN, LOW);
     }
     else
     {
