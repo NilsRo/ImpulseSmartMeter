@@ -792,8 +792,6 @@ void loop()
   {
     impulsePinState = 1 - impulsePinState; // invert pin state as it is changed
     impulsePinChanged = now;
-    digitalWrite(LED_BUILTIN, HIGH);
-
     if (impulsePinState) // button pressed action - set pressed time
     {
       // button released
@@ -805,7 +803,7 @@ void loop()
       Serial.println(timeReleased - timeDetected);
 
       char msg_out[40];
-      sprintf(msg_out, "Impulse released: %06u", timeReleased - timeDetected);
+      sprintf(msg_out, "Impulse released: %d", timeReleased - timeDetected);
       mqttPublish(MQTT_PUB_INFO, msg_out);
       impulseCounted++;
       digitalWrite(LED_BUILTIN, LOW);
@@ -813,6 +811,7 @@ void loop()
     else
     {
       timeDetected = now;
+      digitalWrite(LED_BUILTIN, HIGH);
       Serial.println("Impulse detected");
       mqttPublish(MQTT_PUB_INFO, "Impulse detected");
     }
