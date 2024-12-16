@@ -50,7 +50,6 @@ char mqttServer[STRING_LEN];
 char mqttUser[STRING_LEN];
 char mqttPassword[STRING_LEN];
 char mqttTopicPath[STRING_LEN];
-String mqttStatus = "";
 
 Ticker mqttReconnectTimer;
 Ticker secTimer;
@@ -484,9 +483,13 @@ void onWifiDisconnect(WiFiEvent_t event, WiFiEventInfo_t info)
 
 void onMqttConnect(bool sessionPresent)
 {
+  std::string tempTopic;
+  tempTopic.append(mqttTopicPath);
+  tempTopic.append("status");
   Serial.println("Connected to MQTT.");
   Serial.print("Session present: ");
   Serial.println(sessionPresent);
+  mqttClient.publish(tempTopic.c_str(), 1, true, "online");
   uint16_t packetIdSub;
   digitalWrite(LED_BUILTIN, HIGH);
   mqttSendTopics(true);
@@ -725,6 +728,9 @@ void setup()
   server.on("/crash", startCrash);
   Serial.println("Wifi manager ready.");
 
+  std::string tempTopic;
+  tempTopic.append(mqttTopicPath);
+  tempTopic.append("status");
   mqttClient.onConnect(onMqttConnect);
   mqttClient.onDisconnect(onMqttDisconnect);
   mqttClient.onPublish(onMqttPublish);
@@ -734,6 +740,7 @@ void setup()
   if (mqttUser != "")
     mqttClient.setCredentials(mqttUser, mqttPassword);
   mqttClient.setServer(mqttServer, MQTT_PORT);
+  mqttClient.setWill(tempTopic.c_str(), 1, true, "offline");
   Serial.println("MQTT ready");
 
   // configure the timezone
