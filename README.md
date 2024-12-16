@@ -9,6 +9,7 @@ There are some projects included tasmota that provided impulse counters but I de
 * Guided setup to avoid storing WiFi password, etc. in the code
 * NVRAM backup of the actual value
 * error message of it was offline longer than 10 minutes with realtime clock (NTP)
+* build in LED shows reed sensor status
 
 ## [Hardware](docs/schema.pdf)
 * MH-ET Live D1 mini ESP32
@@ -28,9 +29,10 @@ You can compile your own firmware version or use the firmware provided in the re
    1. publish the following topics (folder structure can be changed):
       * "ht/gas/imp_counted_1": actual impulse count
       * "ht/gas/imp_value_1": actual value consumed
-      * "ht/gas/heartbeat": status if the device was more than 10 minutes offline
+      * "ht/gas/heartbeat": shows an error if the device was more than 10 minutes offline
       * "ht/gas/downtime": number of seconds the thing was switched off
       * "ht/gas/info": some status information
+      * "ht/gas/status": on-/offline status of the system
 3. NTP configuration to get RTC infos for logging (default is fine for german timezone)
 
 ![status page](img/opera_2023-11-27%20212528.png)

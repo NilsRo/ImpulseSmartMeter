@@ -491,7 +491,6 @@ void onMqttConnect(bool sessionPresent)
   Serial.println(sessionPresent);
   mqttClient.publish(tempTopic.c_str(), 1, true, "online");
   uint16_t packetIdSub;
-  digitalWrite(LED_BUILTIN, HIGH);
   mqttSendTopics(true);
 }
 
@@ -521,8 +520,6 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
   strftime(mqttDisconnectTime, 40, "%d.%m.%Y %T", &localTime);
 
   Serial.printf(" [%8u] Disconnected from the broker reason = %s\n", millis(), mqttDisconnectReason.c_str());
-  digitalWrite(LED_BUILTIN, LOW);
-
   if (WiFi.isConnected())
   {
     Serial.printf(" [%8u] Reconnecting to MQTT..\n", millis());
@@ -568,7 +565,16 @@ void mqttPublish(const char *topic, const char *payload)
   std::string tempTopic;
   tempTopic.append(mqttTopicPath);
   tempTopic.append(topic);
-  mqttClient.publish(tempTopic.c_str(), 0, true, payload);
+  if (mqttClient.connected())
+  {
+    mqttClient.publish(tempTopic.c_str(), 0, true, payload);
+  }
+  else
+  {
+    Serial.print("mqtt message could not be send: ");
+    Serial.println(tempTopic.c_str());
+    Serial.println(payload);
+  }
 }
 //-- END SECTION: connection handling
 
@@ -659,7 +665,7 @@ void setup()
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(IMPULSEPIN, INPUT_PULLUP);
   impulsePinState = digitalRead(IMPULSEPIN); // init PIN state
-  digitalWrite(LED_BUILTIN, LOW);
+  digitalWrite(LED_BUILTIN, HIGH);
 
   // WiFi.onEvent(onWifiConnected, ARDUINO_EVENT_WIFI_STA_CONNECTED);
   WiFi.onEvent(onWifiDisconnect, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
@@ -771,6 +777,7 @@ void setup()
   // Timers
   sec10Timer.attach(10, onSec10Timer);
   min10Timer.attach(300, onMin5Timer);
+  digitalWrite(LED_BUILTIN, LOW);
 }
 
 void loop()
@@ -793,8 +800,6 @@ void loop()
   {
     impulsePinState = 1 - impulsePinState; // invert pin state as it is changed
     impulsePinChanged = now;
-    // digitalWrite(LED_BUILTIN, HIGH);
-
     if (impulsePinState) // button pressed action - set pressed time
     {
       // button released
@@ -806,14 +811,15 @@ void loop()
       Serial.println(timeReleased - timeDetected);
 
       char msg_out[40];
-      sprintf(msg_out, "Impulse released: %06u", timeReleased - timeDetected);
+      sprintf(msg_out, "Impulse released: %d", timeReleased - timeDetected);
       mqttPublish(MQTT_PUB_INFO, msg_out);
       impulseCounted++;
-      // digitalWrite(LED_BUILTIN, LOW);
+      digitalWrite(LED_BUILTIN, LOW);
     }
     else
     {
       timeDetected = now;
+      digitalWrite(LED_BUILTIN, HIGH);
       Serial.println("Impulse detected");
       mqttPublish(MQTT_PUB_INFO, "Impulse detected");
     }
