@@ -97,6 +97,7 @@ String getStatus();
 String getStatusJson();
 void setTimezone(String timezone);
 void connectToMqtt();
+void mqttPublish(const char *topic, const char *payload);
 void mqttSendTopics(bool mqttInit = false);
 //--
 
@@ -288,6 +289,13 @@ void handleRoot()
   s += "</tr><tr>";
   s += "<td>" + String(mqttTopicPathParam.label) + ": </td>";
   s += "<td>" + String(mqttTopicPath) + "</td>";
+  s += "</tr><tr>";
+  s += "<td>status: </td>";
+  if (mqttClient.connected())
+    s += "<td>connected</td>";
+  else
+    s += "<td>disconnected</td>";
+  s += "</tr><tr>";
   s += "</tr><tr>";
   s += "<td>last disconnect reason: </td>";
   s += "<td>" + mqttDisconnectReason + "</td>";
@@ -483,13 +491,10 @@ void onWifiDisconnect(WiFiEvent_t event, WiFiEventInfo_t info)
 
 void onMqttConnect(bool sessionPresent)
 {
-  std::string tempTopic;
-  tempTopic.append(mqttTopicPath);
-  tempTopic.append("status");
   Serial.println("Connected to MQTT.");
   Serial.print("Session present: ");
   Serial.println(sessionPresent);
-  mqttClient.publish(tempTopic.c_str(), 1, true, "online");
+  mqttPublish("status", "online");
   uint16_t packetIdSub;
   mqttSendTopics(true);
 }
@@ -737,6 +742,7 @@ void setup()
   std::string tempTopic;
   tempTopic.append(mqttTopicPath);
   tempTopic.append("status");
+  // mqttClient.setWill(tempTopic.c_str(), 0, true, "offline", 7);
   mqttClient.onConnect(onMqttConnect);
   mqttClient.onDisconnect(onMqttDisconnect);
   mqttClient.onPublish(onMqttPublish);
@@ -746,7 +752,6 @@ void setup()
   if (mqttUser != "")
     mqttClient.setCredentials(mqttUser, mqttPassword);
   mqttClient.setServer(mqttServer, MQTT_PORT);
-  mqttClient.setWill(tempTopic.c_str(), 1, true, "offline");
   Serial.println("MQTT ready");
 
   // configure the timezone
