@@ -50,6 +50,7 @@ char mqttServer[STRING_LEN];
 char mqttUser[STRING_LEN];
 char mqttPassword[STRING_LEN];
 char mqttTopicPath[STRING_LEN];
+static char mqttWillTopic[STRING_LEN];
 
 Ticker mqttReconnectTimer;
 Ticker secTimer;
@@ -494,7 +495,7 @@ void onMqttConnect(bool sessionPresent)
   Serial.println("Connected to MQTT.");
   Serial.print("Session present: ");
   Serial.println(sessionPresent);
-  mqttPublish("status", "online");
+  mqttPublish(MQTT_PUB_STATUS, "online");
   uint16_t packetIdSub;
   mqttSendTopics(true);
 }
@@ -739,10 +740,9 @@ void setup()
   server.on("/crash", startCrash);
   Serial.println("Wifi manager ready.");
 
-  std::string tempTopic;
-  tempTopic.append(mqttTopicPath);
-  tempTopic.append("status");
-  // mqttClient.setWill(tempTopic.c_str(), 0, true, "offline", 7);
+  strcpy(mqttWillTopic, mqttTopicPath);
+  strcat(mqttWillTopic, MQTT_PUB_STATUS);
+  mqttClient.setWill(mqttWillTopic, 0, true, "offline", 7);
   mqttClient.onConnect(onMqttConnect);
   mqttClient.onDisconnect(onMqttDisconnect);
   mqttClient.onPublish(onMqttPublish);
