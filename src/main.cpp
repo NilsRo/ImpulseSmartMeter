@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
-#include <ArduinoJson.h>
 #include <Ticker.h>
 #include <AsyncMqttClient.h>
 #include <ArduinoOTA.h>
@@ -94,8 +93,6 @@ int mod(int x, int y)
 }
 
 // Necessary forward declarations
-String getStatus();
-String getStatusJson();
 void setTimezone(String timezone);
 void connectToMqtt();
 void mqttPublish(const char *topic, const char *payload);
@@ -495,7 +492,7 @@ void onMqttConnect(bool sessionPresent)
   Serial.println("Connected to MQTT.");
   Serial.print("Session present: ");
   Serial.println(sessionPresent);
-  mqttPublish(MQTT_PUB_STATUS, "online");
+  mqttPublish(MQTT_PUB_STATUS, "Online");
   uint16_t packetIdSub;
   mqttSendTopics(true);
 }
@@ -742,7 +739,7 @@ void setup()
 
   strcpy(mqttWillTopic, mqttTopicPath);
   strcat(mqttWillTopic, MQTT_PUB_STATUS);
-  mqttClient.setWill(mqttWillTopic, 0, true, "offline", 7);
+  mqttClient.setWill(mqttWillTopic, 0, true, "Offline", 7);
   mqttClient.onConnect(onMqttConnect);
   mqttClient.onDisconnect(onMqttDisconnect);
   mqttClient.onPublish(onMqttPublish);
