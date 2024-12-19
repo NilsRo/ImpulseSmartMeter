@@ -294,7 +294,6 @@ void handleRoot()
   else
     s += "<td>disconnected</td>";
   s += "</tr><tr>";
-  s += "</tr><tr>";
   s += "<td>last disconnect reason: </td>";
   s += "<td>" + mqttDisconnectReason + "</td>";
   s += "</tr><tr>";
