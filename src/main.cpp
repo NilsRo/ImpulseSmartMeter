@@ -3,7 +3,10 @@
 #include <WiFi.h>
 #include <Ticker.h>
 #include <AsyncMqttClient.h>
+#include <Hashtable.h>
+#include <map>
 #include <ArduinoOTA.h>
+#include <ArduinoJson.h>
 #include <IotWebConf.h>
 #include <IotWebConfUsing.h>
 #include <IotWebConfTParameter.h>
@@ -20,6 +23,7 @@
 // #define nils_length( x ) ( sizeof(x) )
 
 const int IMPULSEPIN = GPIO_NUM_27;
+const int MAX_DOWNTIME = 600;
 
 unsigned long timeDetected = 0;
 unsigned long timeReleased = 0;
@@ -29,21 +33,26 @@ unsigned int mqttImpulseCounted = 0;
 unsigned int nvsImpulseCounted = 0;
 bool impulsePinState = false;
 bool needReset = false;
-byte heartbeatError = 0;
+byte heartbeatError = 1;
 byte mqttHeartbeatError = 0;
 char impulseUnit[STRING_LEN];
+long downtime = 0;
 
 // For a cloud MQTT broker, type the domain name
 // #define MQTT_HOST "example.com"
 #define MQTT_PORT 1883
-#define MQTT_PUB_IMPULSE_OUT1 "imp_counted_1"
-#define MQTT_PUB_VALUE_OUT1 "imp_value_1"
+#define MQTT_PUB_OUT1_IMPULSE "imp_counted_1"
+#define MQTT_PUB_OUT1_VALUE "imp_value_1"
+#define MQTT_PUB_OUT1_UNIT "imp_unit_1"
 #define MQTT_PUB_HEARTBEAT "heartbeat"
 #define MQTT_PUB_DOWNTIME "downtime"
 #define MQTT_PUB_INFO "info"
+#define MQTT_PUB_SYSINFO "sysinfo"
 #define MQTT_PUB_STATUS "status"
+#define MQTT_PUB_WIFI "wifi"
 AsyncMqttClient mqttClient;
 String mqttDisconnectReason;
+std::map<const char *, const char *> mqttLastMessage;
 char mqttDisconnectTime[40];
 char mqttServer[STRING_LEN];
 char mqttUser[STRING_LEN];
@@ -95,8 +104,9 @@ int mod(int x, int y)
 // Necessary forward declarations
 void setTimezone(String timezone);
 void connectToMqtt();
-void mqttPublish(const char *topic, const char *payload);
+void mqttPublish(const char *topic, const char *payload, bool force);
 void mqttSendTopics(bool mqttInit = false);
+String getHeartbeatMessage();
 //--
 
 void saveImpulseToNvs()
@@ -322,24 +332,14 @@ void handleRoot()
   s += impulseCounted;
   s += "<p>consumption: ";
   s += float(impulseCounted) * impulseMultiplierParam.value();
+  s += " ";
   s += impulseUnit;
   uptime::calculateUptime();
   sprintf(tempStr, "%04u Tage %02u:%02u:%02u", uptime::getDays(), uptime::getHours(), uptime::getMinutes(), uptime::getSeconds());
   s += "<p>uptime: " + String(tempStr);
   s += "<p>last reset reason: " + verbose_print_reset_reason(esp_reset_reason());
   s += "<p>heartbeat: ";
-  switch (heartbeatError)
-  {
-  case 0:
-    s += "unchecked";
-    break;
-  case 1:
-    s += "ok";
-    break;
-  case 2:
-    s += "downtime too long";
-    break;
-  }
+  s += getHeartbeatMessage();
   s += "<p>";
   switch (esp_core_dump_image_check())
   {
@@ -397,7 +397,7 @@ void configSaved()
   saveImpulseToNvs();
   if (timeClient.isTimeSet())
   {
-    heartbeatError = 1;
+    heartbeatError = 0;
     preferences.putULong("heartbeat", timeClient.getEpochTime());
   }
 
@@ -471,10 +471,56 @@ void connectToMqtt()
   }
 }
 
+String getHeartbeatMessage()
+{
+  switch (heartbeatError)
+  {
+  case 0:
+    return "ok";
+  case 1:
+    return "unchecked";
+  case 2:
+    return "downtime too long";
+  }
+  return "";
+}
+
+String getWifiJson()
+{
+  JsonDocument object;
+  String jsonString;
+
+  object["ssid"] = WiFi.SSID();
+  object["sta_ip"] = WiFi.localIP().toString();
+  object["rssi"] = WiFi.RSSI();
+  object["mac"] = WiFi.macAddress();
+  serializeJson(object, jsonString);
+  return jsonString;
+}
+
+String getSysinfoJson()
+{
+  JsonDocument object;
+  String jsonString;
+
+  object["heartbeat"]["code"] = heartbeatError;
+  object["heartbeat"]["msg"] = getHeartbeatMessage();
+  object["heartbeat"]["downtime"] = downtime; // downtime in seconds
+  object["system"]["reset_reason"] = esp_reset_reason();
+  object["system"]["reset_reason_msg"] = verbose_print_reset_reason(esp_reset_reason());
+  object["system"]["core_dump"] = esp_core_dump_image_check();
+  object["system"]["heap_free"] = esp_get_free_internal_heap_size();    // in bytes
+  object["system"]["heap_min_free"] = esp_get_minimum_free_heap_size(); // in bytes
+  object["ntp"]["time_set"] = timeClient.isTimeSet();
+  object["mqtt"]["disconnect_reason"] = mqttDisconnectReason;
+  object["mqtt"]["disconnect_time"] = mqttDisconnectTime;
+
+  serializeJson(object, jsonString);
+  return jsonString;
+}
+
 void onWifiConnected()
 {
-  Serial.println("Connected to Wi-Fi.");
-  Serial.println(WiFi.localIP());
   connectToMqtt();
   ArduinoOTA.begin();
 }
@@ -488,11 +534,12 @@ void onWifiDisconnect(WiFiEvent_t event, WiFiEventInfo_t info)
 
 void onMqttConnect(bool sessionPresent)
 {
+  String test;
   Serial.println("Connected to MQTT.");
   Serial.print("Session present: ");
   Serial.println(sessionPresent);
-  mqttPublish(MQTT_PUB_STATUS, "Online");
-  uint16_t packetIdSub;
+  mqttPublish(MQTT_PUB_STATUS, "Online", true);
+  mqttPublish(MQTT_PUB_WIFI, getWifiJson().c_str(), true);
   mqttSendTopics(true);
 }
 
@@ -562,19 +609,40 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
   // Serial.println(total);
 }
 
-void mqttPublish(const char *topic, const char *payload)
+void mqttPublish(const char *topic, const char *payload, bool force)
 {
-  std::string tempTopic;
-  tempTopic.append(mqttTopicPath);
-  tempTopic.append(topic);
+  // TODO: Manchmal sind die Chars in der MapList defekt im Besonderen beim SysInfo Topic
+  String tempTopic;
+  tempTopic += mqttTopicPath;
+  tempTopic += topic;
+
+  Serial.println("----------");
+  Serial.println(timeClient.getFormattedTime());
+  Serial.println(topic);
+
+  if (mqttLastMessage.find(topic) == mqttLastMessage.end())
+  {
+    mqttLastMessage[topic] = payload;
+    Serial.println("Topic initalisiert");
+  }
   if (mqttClient.connected())
   {
-    mqttClient.publish(tempTopic.c_str(), 0, true, payload);
+    Serial.println(strcmp(mqttLastMessage[topic], payload) != 0);
+    Serial.println(mqttLastMessage[topic]);
+    Serial.println(payload);
+    Serial.println(force);
+    Serial.println("----------");
+    if (strcmp(mqttLastMessage[topic], payload) != 0 || force)
+    {
+      mqttClient.publish(tempTopic.c_str(), 0, true, payload);
+      mqttLastMessage[topic] = payload;
+    }
   }
   else
   {
     Serial.print("mqtt message could not be send: ");
-    Serial.println(tempTopic.c_str());
+    Serial.print(tempTopic.c_str());
+    Serial.print(" = ");
     Serial.println(payload);
   }
 }
@@ -586,39 +654,21 @@ void mqttPublishUptime()
   uptime::calculateUptime();
   sprintf(msg_out, "%04u %s %02u:%02u:%02u", uptime::getDays(), "days", uptime::getHours(), uptime::getMinutes(), uptime::getSeconds());
   // Serial.println(msg_out);
-  mqttPublish(MQTT_PUB_INFO, msg_out);
+  mqttPublish(MQTT_PUB_INFO, msg_out, false);
 }
 
 void mqttSendTopics(bool mqttInit)
 {
   char msg_out[20];
-  if (impulseCounted != mqttImpulseCounted || mqttInit)
-  {
-    sprintf(msg_out, "%d", impulseCounted);
-    mqttImpulseCounted = impulseCounted;
-    mqttPublish(MQTT_PUB_IMPULSE_OUT1, msg_out);
-    float value = float(impulseCounted) * impulseMultiplierParam.value();
-    sprintf(msg_out, "%.2f", value);
-    mqttPublish(MQTT_PUB_VALUE_OUT1, msg_out);
-  }
+  sprintf(msg_out, "%d", impulseCounted);
+  mqttImpulseCounted = impulseCounted;
+  mqttPublish(MQTT_PUB_OUT1_IMPULSE, msg_out, mqttInit);
+  float value = float(impulseCounted) * impulseMultiplierParam.value();
+  sprintf(msg_out, "%.2f", value);
+  mqttPublish(MQTT_PUB_OUT1_VALUE, msg_out, mqttInit);
 
-  if (heartbeatError != mqttHeartbeatError || mqttInit)
-  {
-    switch (heartbeatError)
-    {
-    case 0:
-      strcpy(msg_out, "unchecked");
-      break;
-    case 1:
-      strcpy(msg_out, "ok");
-      break;
-    case 2:
-      strcpy(msg_out, "downtime too long");
-      break;
-    }
-    mqttHeartbeatError = heartbeatError;
-    mqttPublish(MQTT_PUB_HEARTBEAT, msg_out);
-  }
+  mqttPublish(MQTT_PUB_SYSINFO, getSysinfoJson().c_str(), mqttInit);
+  mqttPublish(MQTT_PUB_OUT1_UNIT, impulseUnit, mqttInit);
 
   if (mqttInit)
     mqttPublishUptime();
@@ -627,19 +677,19 @@ void mqttSendTopics(bool mqttInit)
 void onSec10Timer()
 {
   // check heartbeat and set errorstate - check onetime if NTP is available the first time
-  if (timeClient.isTimeSet() && heartbeatError == 0 && preferences.isKey("heartbeat"))
+  if (timeClient.isTimeSet() && heartbeatError == 1 && preferences.isKey("heartbeat"))
   {
     Serial.print("heartbeat: ");
     Serial.println(preferences.getULong("heartbeat"));
-    if (timeClient.getEpochTime() - preferences.getULong("heartbeat") > (600 + (millis() / 1000))) // 10 minutes offline leads into an error
+    downtime = timeClient.getEpochTime() - preferences.getULong("heartbeat") - (millis() / 1000);
+    if (downtime > (MAX_DOWNTIME + (millis() / 1000))) // 10 minutes -default- not running leads into an error message
       heartbeatError = 2;
     else
-      heartbeatError = 1;
+      heartbeatError = 0;
     char msg_out[20];
-    sprintf(msg_out, "%d", timeClient.getEpochTime() - preferences.getULong("heartbeat") - (millis() / 1000));
+    sprintf(msg_out, "%d", downtime);
     Serial.print("difference: ");
     Serial.println(msg_out);
-    mqttPublish(MQTT_PUB_DOWNTIME, msg_out);
   }
 
   mqttSendTopics();
@@ -648,10 +698,11 @@ void onSec10Timer()
 void onMin5Timer()
 {
   mqttPublishUptime();
+  mqttPublish(MQTT_PUB_WIFI, getWifiJson().c_str(), false);
   saveImpulseToNvs();
 
   // heartbeat - save NTP time in NVS
-  if (timeClient.isTimeSet() && (heartbeatError == 1 || !preferences.isKey("heartbeat")))
+  if (timeClient.isTimeSet() && (heartbeatError == 0 || !preferences.isKey("heartbeat")))
   {
     Serial.print("heartbeat saved: ");
     Serial.println(timeClient.getEpochTime());
@@ -736,6 +787,7 @@ void setup()
   server.on("/crash", startCrash);
   Serial.println("Wifi manager ready.");
 
+  mqttClient.setClientId(iotWebConf.getThingName());
   strcpy(mqttWillTopic, mqttTopicPath);
   strcat(mqttWillTopic, MQTT_PUB_STATUS);
   mqttClient.setWill(mqttWillTopic, 0, true, "Offline", 7);
@@ -813,7 +865,7 @@ void loop()
 
       char msg_out[40];
       sprintf(msg_out, "Impulse released: %d", timeReleased - timeDetected);
-      mqttPublish(MQTT_PUB_INFO, msg_out);
+      mqttPublish(MQTT_PUB_INFO, msg_out, true);
       impulseCounted++;
       digitalWrite(LED_BUILTIN, LOW);
     }
@@ -822,7 +874,7 @@ void loop()
       timeDetected = now;
       digitalWrite(LED_BUILTIN, HIGH);
       Serial.println("Impulse detected");
-      mqttPublish(MQTT_PUB_INFO, "Impulse detected");
+      mqttPublish(MQTT_PUB_INFO, "Impulse detected", true);
     }
   }
 }
