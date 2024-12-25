@@ -50,7 +50,8 @@ long downtime = 0;
 #define MQTT_PUB_WIFI "wifi"
 AsyncMqttClient mqttClient;
 String mqttDisconnectReason;
-char mqttDisconnectTime[40];
+char mqttDisconnectTime[20];
+unsigned long mqttDisconnectTimestamp;
 char mqttServer[STRING_LEN];
 char mqttUser[STRING_LEN];
 char mqttPassword[STRING_LEN];
@@ -507,6 +508,7 @@ String getSysinfoJson()
   object["ntp"]["time_set"] = timeClient.isTimeSet();
   object["mqtt"]["disconnect_reason"] = mqttDisconnectReason;
   object["mqtt"]["disconnect_time"] = mqttDisconnectTime;
+  object["mqtt"]["disconnect_timestamp"] = mqttDisconnectTimestamp;
 
   serializeJson(object, jsonString);
   return jsonString;
@@ -572,8 +574,10 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
     mqttDisconnectReason = "MQTT_NOT_AUTHORIZED";
     break;
   }
-  strftime(mqttDisconnectTime, 40, "%d.%m.%Y %T", &localTime);
-
+  strftime(mqttDisconnectTime, 20, "%d.%m.%Y %T", &localTime);
+  time_t now;
+  time(&now);
+  mqttDisconnectTimestamp = now;
   Serial.printf(" [%8u] Disconnected from the broker reason = %s\n", millis(), mqttDisconnectReason.c_str());
   if (WiFi.isConnected())
   {
