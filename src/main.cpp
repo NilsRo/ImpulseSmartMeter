@@ -103,7 +103,7 @@ int mod(int x, int y)
 void setTimezone(String timezone);
 void connectToMqtt();
 void mqttPublish(const char *topic, const char *payload, bool force);
-void mqttSendTopics(bool mqttInit = false);
+void mqttSendTopics(bool mqttInit);
 String getHeartbeatMessage();
 //--
 
@@ -701,7 +701,7 @@ void onSec10Timer()
     Serial.print("Downtime detected: ");
     Serial.println(msg_out);
   }
-  mqttSendTopics();
+  mqttSendTopics(false);
 }
 
 void onMin5Timer()
