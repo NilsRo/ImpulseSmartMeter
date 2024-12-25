@@ -41,17 +41,15 @@ long downtime = 0;
 // #define MQTT_HOST "example.com"
 #define MQTT_PORT 1883
 #define MQTT_PUB_OUT1_IMPULSE "imp_counted_1"
+#define MQTT_SUB_CMND_OUT1_IMPULSE "command/set_imp_1"
 #define MQTT_PUB_OUT1_VALUE "imp_value_1"
 #define MQTT_PUB_OUT1_UNIT "imp_unit_1"
-#define MQTT_PUB_HEARTBEAT "heartbeat"
-#define MQTT_PUB_DOWNTIME "downtime"
 #define MQTT_PUB_INFO "info"
 #define MQTT_PUB_SYSINFO "sysinfo"
 #define MQTT_PUB_STATUS "status"
 #define MQTT_PUB_WIFI "wifi"
 AsyncMqttClient mqttClient;
 String mqttDisconnectReason;
-std::map<const char *, const char *> mqttLastMessage;
 char mqttDisconnectTime[40];
 char mqttServer[STRING_LEN];
 char mqttUser[STRING_LEN];
@@ -392,7 +390,7 @@ void configSaved()
   preferences.putString("wifiSsid", String(iotWebConf.getWifiAuthInfo().ssid));
   preferences.putString("wifiPassword", String(iotWebConf.getWifiAuthInfo().password));
 
-  impulseCounted = atol(impulseCountedStr);
+  impulseCounted = atoi(impulseCountedStr);
   saveImpulseToNvs();
   if (timeClient.isTimeSet())
   {
@@ -429,6 +427,11 @@ bool formValidator(iotwebconf::WebRequestWrapper *webRequestWrapper)
   //   valid = false;
   // }
 
+  if (webRequestWrapper->arg(mqttTopicPathParam.getId()).endsWith("/") == false)
+  {
+    mqttTopicPathParam.errorMessage = "The topic path must end with a slash: /";
+    valid = false;
+  }
   return valid;
 }
 
@@ -496,11 +499,11 @@ String getSysinfoJson()
   object["heartbeat"]["code"] = heartbeatError;
   object["heartbeat"]["msg"] = getHeartbeatMessage();
   object["heartbeat"]["downtime"] = downtime; // downtime in seconds
-  object["system"]["reset_reason"] = esp_reset_reason();
-  object["system"]["reset_reason_msg"] = verbose_print_reset_reason(esp_reset_reason());
-  object["system"]["core_dump"] = esp_core_dump_image_check();
+  object["sys"]["reset_reason"] = esp_reset_reason();
+  object["sys"]["reset_reason_msg"] = verbose_print_reset_reason(esp_reset_reason());
+  object["sys"]["core_dump"] = esp_core_dump_image_check();
   // object["system"]["heap_free"] = esp_get_free_internal_heap_size();    // in bytes
-  object["system"]["heap_min_free"] = esp_get_minimum_free_heap_size(); // in bytes
+  object["sys"]["heap_min_free"] = esp_get_minimum_free_heap_size(); // in bytes
   object["ntp"]["time_set"] = timeClient.isTimeSet();
   object["mqtt"]["disconnect_reason"] = mqttDisconnectReason;
   object["mqtt"]["disconnect_time"] = mqttDisconnectTime;
@@ -534,12 +537,15 @@ void onWifiDisconnect(WiFiEvent_t event, WiFiEventInfo_t info)
 
 void onMqttConnect(bool sessionPresent)
 {
-  String test;
   Serial.println("Connected to MQTT.");
   Serial.print("Session present: ");
   Serial.println(sessionPresent);
   mqttPublish(MQTT_PUB_STATUS, "Online", true);
   mqttPublish(MQTT_PUB_WIFI, getWifiJson().c_str(), true);
+  uint16_t packetIdSub;
+  packetIdSub = mqttClient.subscribe((String(mqttTopicPath) + String(MQTT_SUB_CMND_OUT1_IMPULSE)).c_str(), 0);
+  Serial.print("Subscribed to topic: ");
+  Serial.println(String(mqttTopicPath) + String(MQTT_SUB_CMND_OUT1_IMPULSE) + " - " + String(packetIdSub));
   mqttSendTopics(true);
 }
 
@@ -607,6 +613,22 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
   // Serial.println(index);
   // Serial.print("  total: ");
   // Serial.println(total);
+  char new_payload[len + 1];
+  strncpy(new_payload, payload, len);
+  new_payload[len] = '\0';
+  if (String(topic) == (String(mqttTopicPath) + String(MQTT_SUB_CMND_OUT1_IMPULSE)))
+  {
+    Serial.print("MQTT command received to set impulse counter: ");
+    Serial.println(new_payload);
+
+    impulseCounted = atoi(new_payload);
+    saveImpulseToNvs();
+    if (timeClient.isTimeSet())
+    {
+      heartbeatError = 0;
+      preferences.putULong("heartbeat", timeClient.getEpochTime());
+    }
+  }
 }
 
 void mqttPublish(const char *topic, const char *payload, bool force)
@@ -620,16 +642,14 @@ void mqttPublish(const char *topic, const char *payload, bool force)
   {
     if (mqttLastMessage[topicStr] != payloadStr || force)
     {
-      mqttClient.publish(tempTopicStr.c_str(), 0, true, payload);
-      mqttLastMessage[topicStr] = payloadStr;
+      Serial.println("MQTT send: " + tempTopicStr + " = " + payloadStr);
+      if (mqttClient.publish(tempTopicStr.c_str(), 0, true, payload) > 0)
+        mqttLastMessage[topicStr] = payloadStr;
     }
   }
   else
   {
-    Serial.print("mqtt message could not be send: ");
-    Serial.print(tempTopicStr.c_str());
-    Serial.print(" = ");
-    Serial.println(payload);
+    Serial.println("MQTT message not send: " + tempTopicStr + " = " + payloadStr);
   }
 }
 //-- END SECTION: connection handling
@@ -674,10 +694,9 @@ void onSec10Timer()
       heartbeatError = 0;
     char msg_out[20];
     sprintf(msg_out, "%d", downtime);
-    Serial.print("difference: ");
+    Serial.print("Downtime detected: ");
     Serial.println(msg_out);
   }
-
   mqttSendTopics();
 }
 
@@ -853,6 +872,7 @@ void loop()
       sprintf(msg_out, "Impulse released: %d", timeReleased - timeDetected);
       mqttPublish(MQTT_PUB_INFO, msg_out, true);
       impulseCounted++;
+      mqttSendTopics(false);
       digitalWrite(LED_BUILTIN, LOW);
     }
     else
