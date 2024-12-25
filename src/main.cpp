@@ -3,7 +3,6 @@
 #include <WiFi.h>
 #include <Ticker.h>
 #include <AsyncMqttClient.h>
-#include <Hashtable.h>
 #include <map>
 #include <ArduinoOTA.h>
 #include <ArduinoJson.h>
@@ -461,16 +460,7 @@ void updateTime()
   }
 }
 
-//-- SECTION: connection handling
-void connectToMqtt()
-{
-  if (strlen(mqttServer) > 0)
-  {
-    Serial.println("Connecting to MQTT...");
-    mqttClient.connect();
-  }
-}
-
+//-- SECTION: MQTT/Status data preparation
 String getHeartbeatMessage()
 {
   switch (heartbeatError)
@@ -509,7 +499,7 @@ String getSysinfoJson()
   object["system"]["reset_reason"] = esp_reset_reason();
   object["system"]["reset_reason_msg"] = verbose_print_reset_reason(esp_reset_reason());
   object["system"]["core_dump"] = esp_core_dump_image_check();
-  object["system"]["heap_free"] = esp_get_free_internal_heap_size();    // in bytes
+  // object["system"]["heap_free"] = esp_get_free_internal_heap_size();    // in bytes
   object["system"]["heap_min_free"] = esp_get_minimum_free_heap_size(); // in bytes
   object["ntp"]["time_set"] = timeClient.isTimeSet();
   object["mqtt"]["disconnect_reason"] = mqttDisconnectReason;
@@ -517,6 +507,16 @@ String getSysinfoJson()
 
   serializeJson(object, jsonString);
   return jsonString;
+}
+
+//-- SECTION: connection handling
+void connectToMqtt()
+{
+  if (strlen(mqttServer) > 0)
+  {
+    Serial.println("Connecting to MQTT...");
+    mqttClient.connect();
+  }
 }
 
 void onWifiConnected()
@@ -611,37 +611,23 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
 
 void mqttPublish(const char *topic, const char *payload, bool force)
 {
-  // TODO: Manchmal sind die Chars in der MapList defekt im Besonderen beim SysInfo Topic
-  String tempTopic;
-  tempTopic += mqttTopicPath;
-  tempTopic += topic;
+  static std::map<String, String> mqttLastMessage;
+  String topicStr = String(topic);
+  String payloadStr = String(payload);
+  String tempTopicStr = String(mqttTopicPath) + String(topic);
 
-  Serial.println("----------");
-  Serial.println(timeClient.getFormattedTime());
-  Serial.println(topic);
-
-  if (mqttLastMessage.find(topic) == mqttLastMessage.end())
-  {
-    mqttLastMessage[topic] = payload;
-    Serial.println("Topic initalisiert");
-  }
   if (mqttClient.connected())
   {
-    Serial.println(strcmp(mqttLastMessage[topic], payload) != 0);
-    Serial.println(mqttLastMessage[topic]);
-    Serial.println(payload);
-    Serial.println(force);
-    Serial.println("----------");
-    if (strcmp(mqttLastMessage[topic], payload) != 0 || force)
+    if (mqttLastMessage[topicStr] != payloadStr || force)
     {
-      mqttClient.publish(tempTopic.c_str(), 0, true, payload);
-      mqttLastMessage[topic] = payload;
+      mqttClient.publish(tempTopicStr.c_str(), 0, true, payload);
+      mqttLastMessage[topicStr] = payloadStr;
     }
   }
   else
   {
     Serial.print("mqtt message could not be send: ");
-    Serial.print(tempTopic.c_str());
+    Serial.print(tempTopicStr.c_str());
     Serial.print(" = ");
     Serial.println(payload);
   }
