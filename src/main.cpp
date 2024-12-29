@@ -16,6 +16,7 @@
 #include <uptime.h>
 #include <algorithm>
 #include <esp_core_dump.h>
+#include <nvs.h>
 
 #define STRING_LEN 128
 #define nils_length(x) ((sizeof(x) / sizeof(0 [x])) / ((size_t)(!(sizeof(x) % sizeof(0 [x])))))
@@ -36,18 +37,18 @@ byte heartbeatError = 1;
 byte mqttHeartbeatError = 0;
 char impulseUnit[STRING_LEN];
 long downtime = 0;
+JsonDocument historicalData;
 
-// For a cloud MQTT broker, type the domain name
-// #define MQTT_HOST "example.com"
 #define MQTT_PORT 1883
-#define MQTT_PUB_OUT1_IMPULSE "imp_counted_1"
-#define MQTT_SUB_CMND_OUT1_IMPULSE "command/set_imp_1"
-#define MQTT_PUB_OUT1_VALUE "imp_value_1"
-#define MQTT_PUB_OUT1_UNIT "imp_unit_1"
-#define MQTT_PUB_INFO "info"
-#define MQTT_PUB_SYSINFO "sysinfo"
-#define MQTT_PUB_STATUS "status"
-#define MQTT_PUB_WIFI "wifi"
+#define MQTT_PUB_OUT1_IMPULSE "status/0/impulse"
+#define MQTT_SUB_CMND_OUT1_IMPULSE "command/set_impulse_0"
+#define MQTT_PUB_OUT1_VALUE "status/0/value"
+#define MQTT_PUB_OUT1_UNIT "status/0/unit"
+#define MQTT_PUB_OUT1_HIST "status/0/historic"
+#define MQTT_PUB_INFO "status/info"
+#define MQTT_PUB_SYSINFO "status/sysinfo"
+#define MQTT_PUB_STATUS "status/status"
+#define MQTT_PUB_WIFI "status/wifi"
 AsyncMqttClient mqttClient;
 String mqttDisconnectReason;
 char mqttDisconnectTime[20];
@@ -59,7 +60,6 @@ char mqttTopicPath[STRING_LEN];
 static char mqttWillTopic[STRING_LEN];
 
 Ticker mqttReconnectTimer;
-Ticker secTimer;
 Ticker sec10Timer;
 Ticker min10Timer;
 
@@ -320,7 +320,7 @@ void handleRoot()
   s += "<td>" + String(ntpTimezone) + "</td>";
   s += "</tr><tr>";
   s += "<td>actual local time: </td>";
-  strftime(tempStr, 40, "%d.%m.%Y %T", &localTime);
+  strftime(tempStr, 20, "%d.%m.%Y %T", &localTime);
   s += "<td>" + String(tempStr) + "</td>";
   s += "</tr></table></fieldset>";
 
@@ -386,6 +386,9 @@ void configSaved()
   else
     needReset = true;
 
+  // TOOD: Funktioniert mit apPasswort noch nicht immer....
+  Serial.println(iotWebConf.getApPasswordParameter()->getLength() > 0);
+
   if (iotWebConf.getApPasswordParameter()->getLength() > 0)
     preferences.putString("apPassword", String(iotWebConf.getApPasswordParameter()->valueBuffer));
   preferences.putString("wifiSsid", String(iotWebConf.getWifiAuthInfo().ssid));
@@ -404,14 +407,14 @@ void configSaved()
   if (mqttUser != "")
     mqttClient.setCredentials(mqttUser, mqttPassword);
   mqttClient.setServer(mqttServer, MQTT_PORT);
-  Serial.println("MQTT ready");
+  Serial.println("MQTT ready again");
   connectToMqtt();
 
   // restart NTP connection
   // configure the timezone
   configTime(0, 0, ntpServer);
   setTimezone(ntpTimezone);
-  Serial.println("NTP ready");
+  Serial.println("NTP ready again");
 
   Serial.println("Configuration saved.");
 }
@@ -428,9 +431,9 @@ bool formValidator(iotwebconf::WebRequestWrapper *webRequestWrapper)
   //   valid = false;
   // }
 
-  if (webRequestWrapper->arg(mqttTopicPathParam.getId()).endsWith("/") == false)
+  if (!webRequestWrapper->arg(mqttTopicPathParam.getId()).endsWith("/"))
   {
-    mqttTopicPathParam.errorMessage = "The topic path must end with a slash: /";
+    mqttTopicPathParam.errorMessage = "The topicpath must end with a slash: /";
     valid = false;
   }
   return valid;
@@ -496,7 +499,8 @@ String getSysinfoJson()
 {
   JsonDocument object;
   String jsonString;
-
+  nvs_stats_t nvs_stats;
+  nvs_get_stats(NULL, &nvs_stats);
   object["heartbeat"]["code"] = heartbeatError;
   object["heartbeat"]["msg"] = getHeartbeatMessage();
   object["heartbeat"]["downtime"] = downtime; // downtime in seconds
@@ -505,6 +509,7 @@ String getSysinfoJson()
   object["sys"]["core_dump"] = esp_core_dump_image_check();
   // object["system"]["heap_free"] = esp_get_free_internal_heap_size();    // in bytes
   object["sys"]["heap_min_free"] = esp_get_minimum_free_heap_size(); // in bytes
+  object["sys"]["nvs_entries_pct"] = nvs_stats.used_entries / nvs_stats.total_entries * 100;
   object["ntp"]["time_set"] = timeClient.isTimeSet();
   object["mqtt"]["disconnect_reason"] = mqttDisconnectReason;
   object["mqtt"]["disconnect_time"] = mqttDisconnectTime;
@@ -512,6 +517,48 @@ String getSysinfoJson()
 
   serializeJson(object, jsonString);
   return jsonString;
+}
+
+String getHistoricalDataJson()
+{
+  String jsonString;
+  serializeJson(historicalData, jsonString);
+  return jsonString;
+}
+
+void saveHistoricalData()
+{
+  const char dayOfMonth[3] = "01"; // save every first day of month
+  char year[5];
+  char month[3];
+  char day[3];
+  String jsonString;
+  char timeStr[20];
+  itoa(localTime.tm_year + 1900, year, 10);
+  itoa(localTime.tm_mon, month, 10);
+  itoa(localTime.tm_mday, day, 10);
+
+  if (timeClient.isTimeSet() && strcmp(day, dayOfMonth) == 0)
+  {
+    if (historicalData[year][month][day].isNull())
+    {
+      strftime(timeStr, 20, "%d.%m.%Y %T", &localTime);
+      historicalData[year][month][day]["0"]["impulse"] = impulseCounted;
+      historicalData[year][month][day]["0"]["value"] = float(impulseCounted) * impulseMultiplierParam.value();
+      historicalData[year][month][day]["0"]["unit"] = impulseUnit;
+      historicalData[year][month][day]["0"]["timestamp"] = timeClient.getEpochTime();
+      historicalData[year][month][day]["0"]["date"] = timeStr;
+
+      Serial.print("Storing historical data: ");
+      serializeJsonPretty(historicalData, jsonString);
+      Serial.println(jsonString);
+
+      serializeJson(historicalData, jsonString);
+      preferences.putString("historicalData", jsonString);
+
+      mqttPublish(MQTT_PUB_OUT1_HIST, jsonString.c_str(), false);
+    }
+  }
 }
 
 //-- SECTION: connection handling
@@ -575,9 +622,7 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
     break;
   }
   strftime(mqttDisconnectTime, 20, "%d.%m.%Y %T", &localTime);
-  time_t now;
-  time(&now);
-  mqttDisconnectTimestamp = now;
+  mqttDisconnectTimestamp = timeClient.getEpochTime();
   Serial.printf(" [%8u] Disconnected from the broker reason = %s\n", millis(), mqttDisconnectReason.c_str());
   if (WiFi.isConnected())
   {
@@ -648,12 +693,13 @@ void mqttPublish(const char *topic, const char *payload, bool force)
     {
       Serial.println("MQTT send: " + tempTopicStr + " = " + payloadStr);
       if (mqttClient.publish(tempTopicStr.c_str(), 0, true, payload) > 0)
+        // TODO: Statt dem String ggf. einen Hash wegspeichern zur Optimierung der Speichernutzung
         mqttLastMessage[topicStr] = payloadStr;
     }
   }
   else
   {
-    Serial.println("MQTT message not send: " + tempTopicStr + " = " + payloadStr);
+    Serial.println("MQTT not send: " + tempTopicStr + " = " + payloadStr);
   }
 }
 //-- END SECTION: connection handling
@@ -676,9 +722,10 @@ void mqttSendTopics(bool mqttInit)
   float value = float(impulseCounted) * impulseMultiplierParam.value();
   sprintf(msg_out, "%.2f", value);
   mqttPublish(MQTT_PUB_OUT1_VALUE, msg_out, mqttInit);
-
-  mqttPublish(MQTT_PUB_SYSINFO, getSysinfoJson().c_str(), mqttInit);
   mqttPublish(MQTT_PUB_OUT1_UNIT, impulseUnit, mqttInit);
+  if (!historicalData.isNull())
+    mqttPublish(MQTT_PUB_OUT1_HIST, getHistoricalDataJson().c_str(), mqttInit);
+  mqttPublish(MQTT_PUB_SYSINFO, getSysinfoJson().c_str(), mqttInit);
 
   if (mqttInit)
     mqttPublishUptime();
@@ -702,6 +749,8 @@ void onSec10Timer()
     Serial.println(msg_out);
   }
   mqttSendTopics(false);
+
+  saveHistoricalData();
 }
 
 void onMin5Timer()
@@ -733,12 +782,36 @@ void setup()
   WiFi.onEvent(onWifiDisconnect, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   // WiFi.setTxPower(WIFI_POWER_19_5dBm);
 
-  if (!preferences.begin("wifi"))
+  // Start NVS configuration
+  nvs_stats_t nvs_stats;
+  nvs_get_stats(NULL, &nvs_stats);
+  Serial.println("NVS-Statistics:");
+  Serial.print("Used entries: ");
+  Serial.println(nvs_stats.used_entries);
+  Serial.print("Free entries: ");
+  Serial.println(nvs_stats.free_entries);
+  Serial.print("Total entries: ");
+  Serial.println(nvs_stats.total_entries);
+  if (!preferences.begin("settings"))
   {
     Serial.println("Error opening NVS-Namespace");
     for (;;)
       ; // leere Dauerschleife -> Ende
   }
+
+  // TODO: Auf einen "historischen" Namespace umstellen!?
+  if (preferences.isKey("historicalData"))
+  {
+    deserializeJson(historicalData, preferences.getString("historicalData"));
+    // Test of deserialization
+    Serial.print("Loaded historical data: ");
+    String JsonString;
+    serializeJsonPretty(historicalData, JsonString);
+    Serial.println(JsonString);
+  }
+  else
+    Serial.println("Historical data not found in NVRAM.");
+
   iotWebConf.setupUpdateServer(
       [](const char *updatePath)
       { httpUpdater.setup(&server, updatePath); },
@@ -793,10 +866,11 @@ void setup()
                     { iotWebConf.handleNotFound(); });
   server.on("/coredump", handleCoreDump);
   server.on("/deletecoredump", handleDeleteCoreDump);
-  server.on("/crash", startCrash);
+  // server.on("/crash", startCrash); // Debugging only
   Serial.println("Wifi manager ready.");
 
-  mqttClient.setClientId(iotWebConf.getThingName());
+  // TODO: Set client name optionally via config
+  //  mqttClient.setClientId(iotWebConf.getThingName());
   strcpy(mqttWillTopic, mqttTopicPath);
   strcat(mqttWillTopic, MQTT_PUB_STATUS);
   mqttClient.setWill(mqttWillTopic, 0, true, "Offline", 7);
@@ -806,6 +880,7 @@ void setup()
   mqttClient.onMessage(onMqttMessage);
   mqttClient.onSubscribe(onMqttSubscribe);
 
+  // TODO: Add SSL connection
   if (mqttUser != "")
     mqttClient.setCredentials(mqttUser, mqttPassword);
   mqttClient.setServer(mqttServer, MQTT_PORT);
@@ -831,7 +906,7 @@ void setup()
     else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
     else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
     else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
-  Serial.println("OTA Ready");
+  Serial.println("OTA ready");
 
   impulseCounted = preferences.getUInt("impulseCounter", 0);
   nvsImpulseCounted = impulseCounted;
