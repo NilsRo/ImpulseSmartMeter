@@ -2,6 +2,7 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <Ticker.h>
+#include <arduino-timer.h>
 #include <AsyncMqttClient.h>
 #include <map>
 #include <ArduinoOTA.h>
@@ -19,6 +20,9 @@
 #include <nvs.h>
 
 #define STRING_LEN 128
+#define DNS_LEN 254
+#define HOSTNAME_LEN 64
+#define MQTT_LEN 256
 #define nils_length(x) ((sizeof(x) / sizeof(0 [x])) / ((size_t)(!(sizeof(x) % sizeof(0 [x])))))
 // #define nils_length( x ) ( sizeof(x) )
 
@@ -38,6 +42,8 @@ byte mqttHeartbeatError = 0;
 char impulseUnit[STRING_LEN];
 long downtime = 0;
 JsonDocument historicalData;
+bool nvsStatus = false;
+auto timer = timer_create_default();
 
 #define MQTT_PORT 1883
 #define MQTT_PUB_OUT1_IMPULSE "status/0/impulse"
@@ -53,25 +59,25 @@ AsyncMqttClient mqttClient;
 String mqttDisconnectReason;
 char mqttDisconnectTime[20];
 unsigned long mqttDisconnectTimestamp;
-char mqttServer[STRING_LEN];
-char mqttUser[STRING_LEN];
-char mqttPassword[STRING_LEN];
-char mqttTopicPath[STRING_LEN];
-static char mqttWillTopic[STRING_LEN];
+char mqttServer[DNS_LEN];
+char mqttUser[MQTT_LEN];
+char mqttPassword[MQTT_LEN];
+char mqttTopicPath[MQTT_LEN];
+static char mqttWillTopic[MQTT_LEN];
 
 Ticker mqttReconnectTimer;
-Ticker sec10Timer;
-Ticker min10Timer;
+// Ticker sec10Timer;
+// Ticker min10Timer;
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
-char ntpServer[STRING_LEN];
+char ntpServer[DNS_LEN];
 char ntpTimezone[STRING_LEN];
 time_t now;
 struct tm localTime;
 
-char hostname[STRING_LEN];
-#define CONFIG_VERSION "2"
+char hostname[HOSTNAME_LEN];
+#define CONFIG_VERSION "3"
 Preferences preferences;
 int iotWebConfPinState = HIGH;
 unsigned long iotWebConfPinChanged = 0;
@@ -81,31 +87,48 @@ HTTPUpdateServer httpUpdater;
 char impulseCountedStr[10];
 IotWebConf iotWebConf("Gaszaehler", &dnsServer, &server, "", CONFIG_VERSION);
 IotWebConfParameterGroup mqttGroup = IotWebConfParameterGroup("mqtt", "MQTT");
-IotWebConfTextParameter mqttServerParam = IotWebConfTextParameter("server", "mqttServer", mqttServer, STRING_LEN);
-IotWebConfTextParameter mqttUserNameParam = IotWebConfTextParameter("user", "mqttUser", mqttUser, STRING_LEN);
-IotWebConfPasswordParameter mqttUserPasswordParam = IotWebConfPasswordParameter("password", "mqttPassword", mqttPassword, STRING_LEN);
-IotWebConfTextParameter mqttTopicPathParam = IotWebConfTextParameter("topicpath", "mqttTopicPath", mqttTopicPath, STRING_LEN, "ht/gas/");
+IotWebConfTextParameter mqttServerParam = IotWebConfTextParameter("server", "mqttServer", mqttServer, DNS_LEN);
+IotWebConfTextParameter mqttUserNameParam = IotWebConfTextParameter("user", "mqttUser", mqttUser, MQTT_LEN);
+IotWebConfPasswordParameter mqttUserPasswordParam = IotWebConfPasswordParameter("password", "mqttPassword", mqttPassword, MQTT_LEN);
+IotWebConfTextParameter mqttTopicPathParam = IotWebConfTextParameter("topicpath", "mqttTopicPath", mqttTopicPath, MQTT_LEN, "ht/gas/");
 IotWebConfParameterGroup ntpGroup = IotWebConfParameterGroup("ntp", "NTP");
-IotWebConfTextParameter ntpServerParam = IotWebConfTextParameter("server", "ntpServer", ntpServer, STRING_LEN, "de.pool.ntp.org");
+IotWebConfTextParameter ntpServerParam = IotWebConfTextParameter("server", "ntpServer", ntpServer, DNS_LEN, "de.pool.ntp.org");
 IotWebConfTextParameter ntpTimezoneParam = IotWebConfTextParameter("timezone", "ntpTimezone", ntpTimezone, STRING_LEN, "CET-1CEST,M3.5.0/02,M10.5.0/03");
 IotWebConfParameterGroup impulseGroup = IotWebConfParameterGroup("impulse", "Impulse");
 IotWebConfTextParameter impulseUnitParam = IotWebConfTextParameter("unit", "impulseUnit", impulseUnit, STRING_LEN, "m3");
 iotwebconf::FloatTParameter impulseMultiplierParam = iotwebconf::Builder<iotwebconf::FloatTParameter>("impulseMultiplierParam").label("multiplier").defaultValue(1.0).step(0.01).placeholder("e.g. 23.4").build();
 IotWebConfNumberParameter impulseCountedParam = IotWebConfNumberParameter("impulses counted", "impulseCounted", impulseCountedStr, 10, "0");
 
-// -- SECTION: Common functions
+/* #region Common functions
 int mod(int x, int y)
 {
   return x < 0 ? ((x + 1) % y) + y - 1 : x % y;
 }
 
-// Necessary forward declarations
+/* #region   Necessary forward declarations*/
 void setTimezone(String timezone);
 void connectToMqtt();
 void mqttPublish(const char *topic, const char *payload, bool force);
 void mqttSendTopics(bool mqttInit);
 String getHeartbeatMessage();
-//--
+/* #endregion*/
+
+/* #region NVS handling*/
+void changeNvsMode(bool readOnly)
+{
+  if (nvsStatus)
+  {
+    preferences.end();
+  }
+  if (preferences.begin("settings", readOnly))
+    nvsStatus = true;
+  else
+  {
+    Serial.println("Error opening NVS-Namespace");
+    for (;;)
+      ; // leere Dauerschleife -> Ende
+  }
+}
 
 void saveImpulseToNvs()
 {
@@ -116,7 +139,53 @@ void saveImpulseToNvs()
   }
 }
 
-// -- SECTION: Wifi Manager
+void saveHeartbeatToNvs()
+{
+  // heartbeat - save NTP time in NVS
+  if (timeClient.isTimeSet() && (heartbeatError == 0 || !preferences.isKey("heartbeat")))
+  {
+    Serial.print("heartbeat saved: ");
+    Serial.println(timeClient.getEpochTime());
+    preferences.putULong("heartbeat", timeClient.getEpochTime());
+  }
+}
+
+void saveHistoricalData()
+{
+  const char dayOfMonth[3] = "30"; // save every first day of month
+  char year[5];
+  char month[3];
+  char day[3];
+  String jsonString;
+  char timeStr[20];
+  itoa(localTime.tm_year + 1900, year, 10);
+  itoa(localTime.tm_mon, month, 10);
+  itoa(localTime.tm_mday, day, 10);
+
+  if (timeClient.isTimeSet() && strcmp(day, dayOfMonth) == 0)
+  {
+    if (historicalData[year][month][day].isNull())
+    {
+      strftime(timeStr, 20, "%d.%m.%Y %T", &localTime);
+      historicalData[year][month][day]["0"]["impulse"] = impulseCounted;
+      historicalData[year][month][day]["0"]["value"] = float(impulseCounted) * impulseMultiplierParam.value();
+      historicalData[year][month][day]["0"]["unit"] = impulseUnit;
+      historicalData[year][month][day]["0"]["timestamp"] = timeClient.getEpochTime();
+      historicalData[year][month][day]["0"]["date"] = timeStr;
+
+      Serial.print("Storing historical data: ");
+      serializeJsonPretty(historicalData, jsonString);
+      Serial.println(jsonString);
+
+      serializeJson(historicalData, jsonString);
+      preferences.putString("historicalData", jsonString);
+      mqttPublish(MQTT_PUB_OUT1_HIST, jsonString.c_str(), false);
+    }
+  }
+}
+/* #endregion*/
+
+/* #region Wifi Manager*/
 String verbose_print_reset_reason(esp_reset_reason_t reason)
 {
   switch (reason)
@@ -272,7 +341,7 @@ void handleDeleteCoreDump()
   server.send(200, "text/html", s);
 }
 
-// -- SECTION: Wifi Manager
+/* #region Wifi Manager */
 void handleRoot()
 {
   // -- Let IotWebConf test and handle captive portal requests.
@@ -388,19 +457,20 @@ void configSaved()
 
   // TOOD: Funktioniert mit apPasswort noch nicht immer....
   Serial.println(iotWebConf.getApPasswordParameter()->getLength() > 0);
-
   if (iotWebConf.getApPasswordParameter()->getLength() > 0)
     preferences.putString("apPassword", String(iotWebConf.getApPasswordParameter()->valueBuffer));
   preferences.putString("wifiSsid", String(iotWebConf.getWifiAuthInfo().ssid));
   preferences.putString("wifiPassword", String(iotWebConf.getWifiAuthInfo().password));
 
-  impulseCounted = atoi(impulseCountedStr);
-  saveImpulseToNvs();
   if (timeClient.isTimeSet())
   {
     heartbeatError = 0;
     preferences.putULong("heartbeat", timeClient.getEpochTime());
   }
+
+  impulseCounted = atoi(impulseCountedStr);
+  saveImpulseToNvs();
+  changeNvsMode(true);
 
   // restart MQTT connection
   mqttClient.disconnect();
@@ -438,8 +508,8 @@ bool formValidator(iotwebconf::WebRequestWrapper *webRequestWrapper)
   }
   return valid;
 }
-
-//-- SECTION: NTP
+/* #endregion */
+/* #region NTP*/
 void setTimezone(String timezone)
 {
   Serial.printf("  Setting Timezone to %s\n", ntpTimezone);
@@ -466,8 +536,13 @@ void updateTime()
     getLocalTime();
   }
 }
+/* #endregion */
+/* #region MQTT/Status data preparation*/
+bool getMqttActive()
+{
+  return String(mqttServer).length() > 0;
+}
 
-//-- SECTION: MQTT/Status data preparation
 String getHeartbeatMessage()
 {
   switch (heartbeatError)
@@ -525,43 +600,8 @@ String getHistoricalDataJson()
   serializeJson(historicalData, jsonString);
   return jsonString;
 }
-
-void saveHistoricalData()
-{
-  const char dayOfMonth[3] = "01"; // save every first day of month
-  char year[5];
-  char month[3];
-  char day[3];
-  String jsonString;
-  char timeStr[20];
-  itoa(localTime.tm_year + 1900, year, 10);
-  itoa(localTime.tm_mon, month, 10);
-  itoa(localTime.tm_mday, day, 10);
-
-  if (timeClient.isTimeSet() && strcmp(day, dayOfMonth) == 0)
-  {
-    if (historicalData[year][month][day].isNull())
-    {
-      strftime(timeStr, 20, "%d.%m.%Y %T", &localTime);
-      historicalData[year][month][day]["0"]["impulse"] = impulseCounted;
-      historicalData[year][month][day]["0"]["value"] = float(impulseCounted) * impulseMultiplierParam.value();
-      historicalData[year][month][day]["0"]["unit"] = impulseUnit;
-      historicalData[year][month][day]["0"]["timestamp"] = timeClient.getEpochTime();
-      historicalData[year][month][day]["0"]["date"] = timeStr;
-
-      Serial.print("Storing historical data: ");
-      serializeJsonPretty(historicalData, jsonString);
-      Serial.println(jsonString);
-
-      serializeJson(historicalData, jsonString);
-      preferences.putString("historicalData", jsonString);
-
-      mqttPublish(MQTT_PUB_OUT1_HIST, jsonString.c_str(), false);
-    }
-  }
-}
-
-//-- SECTION: connection handling
+/* #endregion*/
+/* #region connection handling*/
 void connectToMqtt()
 {
   if (strlen(mqttServer) > 0)
@@ -683,26 +723,31 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
 void mqttPublish(const char *topic, const char *payload, bool force)
 {
   static std::map<String, String> mqttLastMessage;
-  String topicStr = String(topic);
-  String payloadStr = String(payload);
-  String tempTopicStr = String(mqttTopicPath) + String(topic);
-
-  if (mqttClient.connected())
+  if (getMqttActive())
   {
-    if (mqttLastMessage[topicStr] != payloadStr || force)
+    String topicStr = String(topic);
+    String payloadStr = String(payload);
+    String tempTopicStr = String(mqttTopicPath) + String(topic);
+
+    if (mqttClient.connected())
     {
-      Serial.println("MQTT send: " + tempTopicStr + " = " + payloadStr);
-      if (mqttClient.publish(tempTopicStr.c_str(), 0, true, payload) > 0)
-        // TODO: Statt dem String ggf. einen Hash wegspeichern zur Optimierung der Speichernutzung
-        mqttLastMessage[topicStr] = payloadStr;
+      if (mqttLastMessage[topicStr] != payloadStr || force)
+      {
+        Serial.println("MQTT send: " + tempTopicStr + " = " + payloadStr);
+        if (mqttClient.publish(tempTopicStr.c_str(), 0, true, payload) > 0)
+          // TODO: Statt dem String ggf. einen Hash wegspeichern zur Optimierung der Speichernutzung
+          mqttLastMessage[topicStr] = payloadStr;
+        else
+          Serial.println("MQTT (error) not send: " + tempTopicStr + " = " + payloadStr);
+      }
+    }
+    else
+    {
+      Serial.println("MQTT not send: " + tempTopicStr + " = " + payloadStr);
     }
   }
-  else
-  {
-    Serial.println("MQTT not send: " + tempTopicStr + " = " + payloadStr);
-  }
 }
-//-- END SECTION: connection handling
+/* #endregion*/
 
 void mqttPublishUptime()
 {
@@ -731,7 +776,7 @@ void mqttSendTopics(bool mqttInit)
     mqttPublishUptime();
 }
 
-void onSec10Timer()
+bool onSec10Timer(void *)
 {
   // check heartbeat and set errorstate - check onetime if NTP is available the first time
   if (timeClient.isTimeSet() && heartbeatError == 1 && preferences.isKey("heartbeat"))
@@ -750,22 +795,20 @@ void onSec10Timer()
   }
   mqttSendTopics(false);
 
-  saveHistoricalData();
+  return true;
 }
 
-void onMin5Timer()
+bool onMin5Timer(void *)
 {
   mqttPublishUptime();
   mqttPublish(MQTT_PUB_WIFI, getWifiJson().c_str(), false);
+  changeNvsMode(false);
   saveImpulseToNvs();
+  saveHistoricalData();
+  saveHeartbeatToNvs();
+  changeNvsMode(true);
 
-  // heartbeat - save NTP time in NVS
-  if (timeClient.isTimeSet() && (heartbeatError == 0 || !preferences.isKey("heartbeat")))
-  {
-    Serial.print("heartbeat saved: ");
-    Serial.println(timeClient.getEpochTime());
-    preferences.putULong("heartbeat", timeClient.getEpochTime());
-  }
+  return true;
 }
 
 void setup()
@@ -792,25 +835,19 @@ void setup()
   Serial.println(nvs_stats.free_entries);
   Serial.print("Total entries: ");
   Serial.println(nvs_stats.total_entries);
-  if (!preferences.begin("settings"))
-  {
-    Serial.println("Error opening NVS-Namespace");
-    for (;;)
-      ; // leere Dauerschleife -> Ende
-  }
 
-  // TODO: Auf einen "historischen" Namespace umstellen!?
+  changeNvsMode(false);
   if (preferences.isKey("historicalData"))
   {
     deserializeJson(historicalData, preferences.getString("historicalData"));
     // Test of deserialization
-    Serial.print("Loaded historical data: ");
-    String JsonString;
-    serializeJsonPretty(historicalData, JsonString);
-    Serial.println(JsonString);
+    Serial.println("Loaded historical data");
+    // String JsonString;
+    // serializeJsonPretty(historicalData, JsonString);
+    // Serial.println(JsonString);
   }
   else
-    Serial.println("Historical data not found in NVRAM.");
+    Serial.println("Historical data not found in NVRAM");
 
   iotWebConf.setupUpdateServer(
       [](const char *updatePath)
@@ -910,10 +947,12 @@ void setup()
 
   impulseCounted = preferences.getUInt("impulseCounter", 0);
   nvsImpulseCounted = impulseCounted;
-
+  changeNvsMode(true);
   // Timers
-  sec10Timer.attach(10, onSec10Timer);
-  min10Timer.attach(300, onMin5Timer);
+  timer.every(10000, onSec10Timer);
+  timer.every(300000, onMin5Timer);
+  // sec10Timer.attach(10, onSec10Timer);
+  // min10Timer.attach(300, onMin5Timer);
   digitalWrite(LED_BUILTIN, LOW);
 }
 
@@ -922,11 +961,13 @@ void loop()
   iotWebConf.doLoop();
   ArduinoOTA.handle();
   updateTime();
+  timer.tick();
 
   if (needReset)
   {
     Serial.println("Rebooting in 1 second.");
-    preferences.putUInt("impulseCounter", impulseCounted);
+    saveImpulseToNvs();
+    saveHeartbeatToNvs();
     iotWebConf.delay(1000);
     ESP.restart();
   }
