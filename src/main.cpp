@@ -28,15 +28,15 @@
 
 const int IMPULSEPIN = GPIO_NUM_27;
 const int MAX_DOWNTIME = 600;
+const unsigned long DEBOUNCE_DELAY = 100; // Entprelldauer (in Millisekunden)
 
 unsigned long timeDetected = 0;
 unsigned long timeReleased = 0;
 unsigned int impulseCounted = 0;
-unsigned int impulsePinChanged = 0;
 unsigned int mqttImpulseCounted = 0;
 unsigned int nvsImpulseCounted = 0;
-bool impulsePinState = false;
 bool needReset = false;
+char impulseMeterId[STRING_LEN];
 byte heartbeatError = 1;
 byte mqttHeartbeatError = 0;
 char impulseUnit[STRING_LEN];
@@ -66,8 +66,6 @@ char mqttTopicPath[MQTT_LEN];
 static char mqttWillTopic[MQTT_LEN];
 
 Ticker mqttReconnectTimer;
-// Ticker sec10Timer;
-// Ticker min10Timer;
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
@@ -98,19 +96,34 @@ IotWebConfParameterGroup impulseGroup = IotWebConfParameterGroup("impulse", "Imp
 IotWebConfTextParameter impulseUnitParam = IotWebConfTextParameter("unit", "impulseUnit", impulseUnit, STRING_LEN, "m3");
 iotwebconf::FloatTParameter impulseMultiplierParam = iotwebconf::Builder<iotwebconf::FloatTParameter>("impulseMultiplierParam").label("multiplier").defaultValue(1.0).step(0.01).placeholder("e.g. 23.4").build();
 IotWebConfNumberParameter impulseCountedParam = IotWebConfNumberParameter("impulses counted", "impulseCounted", impulseCountedStr, 10, "0");
+IotWebConfTextParameter impulseMeterIdParam = IotWebConfTextParameter("Meter ID", "impulseMeterId", impulseMeterId, STRING_LEN);
 
-/* #region Common functions
+/* #region Common functions */
 int mod(int x, int y)
 {
   return x < 0 ? ((x + 1) % y) + y - 1 : x % y;
 }
+/* #endregion */
 
-/* #region   Necessary forward declarations*/
+/* #region  Necessary forward declarations*/
 void setTimezone(String timezone);
 void connectToMqtt();
 void mqttPublish(const char *topic, const char *payload, bool force);
 void mqttSendTopics(bool mqttInit);
 String getHeartbeatMessage();
+/* #endregion */
+
+/* #region ISR */
+void handleImpulseFalling1()
+{
+  if ((millis() - timeDetected) > DEBOUNCE_DELAY)
+  {
+    impulseCounted++;
+    Serial.print("Impulse detected: ");
+    Serial.println(millis() - timeDetected);
+  }
+  timeDetected = millis();
+}
 /* #endregion*/
 
 /* #region NVS handling*/
@@ -152,7 +165,7 @@ void saveHeartbeatToNvs()
 
 void saveHistoricalData()
 {
-  const char dayOfMonth[3] = "30"; // save every first day of month
+  const char dayOfMonth[3] = "01"; // save every first day of month
   char year[5];
   char month[3];
   char day[3];
@@ -172,7 +185,7 @@ void saveHistoricalData()
       historicalData[year][month][day]["0"]["unit"] = impulseUnit;
       historicalData[year][month][day]["0"]["timestamp"] = timeClient.getEpochTime();
       historicalData[year][month][day]["0"]["date"] = timeStr;
-
+      historicalData[year][month][day]["0"]["meterId"] = impulseMeterId;
       Serial.print("Storing historical data: ");
       serializeJsonPretty(historicalData, jsonString);
       Serial.println(jsonString);
@@ -401,6 +414,8 @@ void handleRoot()
   s += float(impulseCounted) * impulseMultiplierParam.value();
   s += " ";
   s += impulseUnit;
+  s += "<p>meter: ";
+  s += impulseMeterId;
   uptime::calculateUptime();
   sprintf(tempStr, "%04u Tage %02u:%02u:%02u", uptime::getDays(), uptime::getHours(), uptime::getMinutes(), uptime::getSeconds());
   s += "<p>uptime: " + String(tempStr);
@@ -667,6 +682,7 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
   if (WiFi.isConnected())
   {
     Serial.printf(" [%8u] Reconnecting to MQTT..\n", millis());
+    // timer.in(5000, connectToMqtt);
     mqttReconnectTimer.once(5, connectToMqtt);
   }
 }
@@ -818,7 +834,6 @@ void setup()
   esp_core_dump_init();
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(IMPULSEPIN, INPUT_PULLUP);
-  impulsePinState = digitalRead(IMPULSEPIN); // init PIN state
   digitalWrite(LED_BUILTIN, HIGH);
 
   // WiFi.onEvent(onWifiConnected, ARDUINO_EVENT_WIFI_STA_CONNECTED);
@@ -866,6 +881,7 @@ void setup()
   impulseGroup.addItem(&impulseUnitParam);
   impulseGroup.addItem(&impulseMultiplierParam);
   impulseGroup.addItem(&impulseCountedParam);
+  impulseGroup.addItem(&impulseMeterIdParam);
   iotWebConf.addParameterGroup(&impulseGroup);
 
   iotWebConf.setConfigSavedCallback(&configSaved);
@@ -934,7 +950,12 @@ void setup()
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
                         { Serial.printf("OTA Progress: %u%%\n\r", (progress / (total / 100))); });
   ArduinoOTA.onEnd([]()
-                   { Serial.println("\nEnd OTA"); });
+                   { 
+                   Serial.println("\nEnd OTA"); 
+                   changeNvsMode(false);
+                   saveImpulseToNvs();
+                   saveHeartbeatToNvs();
+                   changeNvsMode(true); });
   ArduinoOTA.onError([](ota_error_t error)
                      {
     Serial.printf("Error[%u]: ", error);
@@ -951,9 +972,9 @@ void setup()
   // Timers
   timer.every(10000, onSec10Timer);
   timer.every(300000, onMin5Timer);
-  // sec10Timer.attach(10, onSec10Timer);
-  // min10Timer.attach(300, onMin5Timer);
   digitalWrite(LED_BUILTIN, LOW);
+
+  attachInterrupt(digitalPinToInterrupt(IMPULSEPIN), handleImpulseFalling1, FALLING);
 }
 
 void loop()
@@ -962,45 +983,15 @@ void loop()
   ArduinoOTA.handle();
   updateTime();
   timer.tick();
-
+  digitalWrite(LED_BUILTIN, !digitalRead(IMPULSEPIN));
   if (needReset)
   {
     Serial.println("Rebooting in 1 second.");
+    changeNvsMode(false);
     saveImpulseToNvs();
     saveHeartbeatToNvs();
+    changeNvsMode(true);
     iotWebConf.delay(1000);
     ESP.restart();
-  }
-
-  // Check impulse
-  unsigned long now = millis();
-  if ((80 < now - impulsePinChanged) && (impulsePinState != digitalRead(IMPULSEPIN)))
-  {
-    impulsePinState = 1 - impulsePinState; // invert pin state as it is changed
-    impulsePinChanged = now;
-    if (impulsePinState) // button pressed action - set pressed time
-    {
-      // button released
-      timeReleased = millis();
-      Serial.println("Impulse released");
-      Serial.print("Impulse State: ");
-      Serial.print(impulsePinState);
-      Serial.print(", Time: ");
-      Serial.println(timeReleased - timeDetected);
-
-      char msg_out[40];
-      sprintf(msg_out, "Impulse released: %d", timeReleased - timeDetected);
-      mqttPublish(MQTT_PUB_INFO, msg_out, true);
-      impulseCounted++;
-      mqttSendTopics(false);
-      digitalWrite(LED_BUILTIN, LOW);
-    }
-    else
-    {
-      timeDetected = now;
-      digitalWrite(LED_BUILTIN, HIGH);
-      Serial.println("Impulse detected");
-      mqttPublish(MQTT_PUB_INFO, "Impulse detected", true);
-    }
   }
 }
