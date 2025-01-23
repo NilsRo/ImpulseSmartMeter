@@ -26,17 +26,21 @@
 #define nils_length(x) ((sizeof(x) / sizeof(0 [x])) / ((size_t)(!(sizeof(x) % sizeof(0 [x])))))
 // #define nils_length( x ) ( sizeof(x) )
 
-const int IMPULSEPIN = GPIO_NUM_27;
-const int MAX_DOWNTIME = 600;
-const unsigned long DEBOUNCE_DELAY = 100; // Entprelldauer (in Millisekunden)
+const unsigned int MAX_DOWNTIME = 600;
+const unsigned int DEBOUNCE_DELAY = 200; // Entprelldauer (in Millisekunden)
 
 unsigned long timeDetected = 0;
 unsigned long timeReleased = 0;
 unsigned int impulseCounted = 0;
 unsigned int mqttImpulseCounted = 0;
 unsigned int nvsImpulseCounted = 0;
+unsigned int impulsePin = GPIO_NUM_27;
+unsigned int impulseLed = GPIO_NUM_2;
+char impulsePinStr[3];
+char impulseLedStr[3];
 bool needReset = false;
 char impulseMeterId[STRING_LEN];
+char impulseMeterName[STRING_LEN];
 byte heartbeatError = 1;
 byte mqttHeartbeatError = 0;
 char impulseUnit[STRING_LEN];
@@ -45,12 +49,9 @@ JsonDocument historicalData;
 bool nvsStatus = false;
 auto timer = timer_create_default();
 
-#define MQTT_PORT 1883
-#define MQTT_PUB_OUT1_IMPULSE "status/0/impulse"
-#define MQTT_SUB_CMND_OUT1_IMPULSE "command/set_impulse_0"
-#define MQTT_PUB_OUT1_VALUE "status/0/value"
-#define MQTT_PUB_OUT1_UNIT "status/0/unit"
-#define MQTT_PUB_OUT1_HIST "status/0/historic"
+#define MQTT_SUB_CMND_IMPULSE "command/set_impulse"
+#define MQTT_PUB_ACT "meters"
+#define MQTT_PUB_HIST "historic"
 #define MQTT_PUB_INFO "status/info"
 #define MQTT_PUB_SYSINFO "status/sysinfo"
 #define MQTT_PUB_STATUS "status/status"
@@ -60,9 +61,12 @@ String mqttDisconnectReason;
 char mqttDisconnectTime[20];
 unsigned long mqttDisconnectTimestamp;
 char mqttServer[DNS_LEN];
+// unsigned int mqttPort;
+char mqttPortStr[6];
 char mqttUser[MQTT_LEN];
 char mqttPassword[MQTT_LEN];
 char mqttTopicPath[MQTT_LEN];
+char mqttClientId[STRING_LEN];
 static char mqttWillTopic[MQTT_LEN];
 
 Ticker mqttReconnectTimer;
@@ -86,17 +90,22 @@ char impulseCountedStr[10];
 IotWebConf iotWebConf("Gaszaehler", &dnsServer, &server, "", CONFIG_VERSION);
 IotWebConfParameterGroup mqttGroup = IotWebConfParameterGroup("mqtt", "MQTT");
 IotWebConfTextParameter mqttServerParam = IotWebConfTextParameter("server", "mqttServer", mqttServer, DNS_LEN);
+IotWebConfNumberParameter mqttPortParam = IotWebConfNumberParameter("port", "mqttPort", mqttPortStr, 6, "1883");
 IotWebConfTextParameter mqttUserNameParam = IotWebConfTextParameter("user", "mqttUser", mqttUser, MQTT_LEN);
 IotWebConfPasswordParameter mqttUserPasswordParam = IotWebConfPasswordParameter("password", "mqttPassword", mqttPassword, MQTT_LEN);
 IotWebConfTextParameter mqttTopicPathParam = IotWebConfTextParameter("topicpath", "mqttTopicPath", mqttTopicPath, MQTT_LEN, "ht/gas/");
+IotWebConfTextParameter mqttClientIdParam = IotWebConfTextParameter("clientname", "mqttClientId", mqttClientId, STRING_LEN);
 IotWebConfParameterGroup ntpGroup = IotWebConfParameterGroup("ntp", "NTP");
 IotWebConfTextParameter ntpServerParam = IotWebConfTextParameter("server", "ntpServer", ntpServer, DNS_LEN, "de.pool.ntp.org");
 IotWebConfTextParameter ntpTimezoneParam = IotWebConfTextParameter("timezone", "ntpTimezone", ntpTimezone, STRING_LEN, "CET-1CEST,M3.5.0/02,M10.5.0/03");
 IotWebConfParameterGroup impulseGroup = IotWebConfParameterGroup("impulse", "Impulse");
+IotWebConfNumberParameter impulsePinParam = IotWebConfNumberParameter("impulse sensor (GPIO)", "impulsePin", impulsePinStr, 3, "27");
+IotWebConfNumberParameter impulseLedParam = IotWebConfNumberParameter("impulse LED (GPIO)", "impulseLed", impulseLedStr, 3, "2");
 IotWebConfTextParameter impulseUnitParam = IotWebConfTextParameter("unit", "impulseUnit", impulseUnit, STRING_LEN, "m3");
 iotwebconf::FloatTParameter impulseMultiplierParam = iotwebconf::Builder<iotwebconf::FloatTParameter>("impulseMultiplierParam").label("multiplier").defaultValue(1.0).step(0.01).placeholder("e.g. 23.4").build();
-IotWebConfNumberParameter impulseCountedParam = IotWebConfNumberParameter("impulses counted", "impulseCounted", impulseCountedStr, 10, "0");
-IotWebConfTextParameter impulseMeterIdParam = IotWebConfTextParameter("Meter ID", "impulseMeterId", impulseMeterId, STRING_LEN);
+IotWebConfNumberParameter impulseCountedParam = IotWebConfNumberParameter("impulses counted", "impulseCounted", impulseCountedStr, 11, "0");
+IotWebConfTextParameter impulseMeterIdParam = IotWebConfTextParameter("meter id", "impulseMeterId", impulseMeterId, STRING_LEN);
+IotWebConfTextParameter impulseMeterNameParam = IotWebConfTextParameter("meter name", "impulseMeterName", impulseMeterName, STRING_LEN);
 
 /* #region Common functions */
 int mod(int x, int y)
@@ -108,20 +117,22 @@ int mod(int x, int y)
 /* #region  Necessary forward declarations*/
 void setTimezone(String timezone);
 void connectToMqtt();
-void mqttPublish(const char *topic, const char *payload, bool force);
+void mqttPublish(const char *topic, const char *payload, bool force, bool jsonAddTimestamp);
 void mqttSendTopics(bool mqttInit);
 String getHeartbeatMessage();
 /* #endregion */
 
 /* #region ISR */
-void handleImpulseFalling1()
+void handleImpulseChanging1()
 {
   if ((millis() - timeDetected) > DEBOUNCE_DELAY)
   {
-    impulseCounted++;
-    Serial.print("Impulse detected: ");
-    Serial.println(millis() - timeDetected);
+    if (digitalRead(impulsePin) == LOW)
+      impulseCounted++;
+    // Serial.print("Impulse detected: ");
+    // Serial.println(millis() - timeDetected);
   }
+  digitalWrite(LED_BUILTIN, digitalRead(impulsePin));
   timeDetected = millis();
 }
 /* #endregion*/
@@ -163,6 +174,7 @@ void saveHeartbeatToNvs()
   }
 }
 
+// TODO: setHistoricalData und Webseite dafür integrieren
 void saveHistoricalData()
 {
   const char dayOfMonth[3] = "01"; // save every first day of month
@@ -174,31 +186,75 @@ void saveHistoricalData()
   itoa(localTime.tm_year + 1900, year, 10);
   itoa(localTime.tm_mon, month, 10);
   itoa(localTime.tm_mday, day, 10);
-
   if (timeClient.isTimeSet() && strcmp(day, dayOfMonth) == 0)
   {
     if (historicalData[year][month][day].isNull())
     {
       strftime(timeStr, 20, "%d.%m.%Y %T", &localTime);
-      historicalData[year][month][day]["0"]["impulse"] = impulseCounted;
-      historicalData[year][month][day]["0"]["value"] = float(impulseCounted) * impulseMultiplierParam.value();
-      historicalData[year][month][day]["0"]["unit"] = impulseUnit;
-      historicalData[year][month][day]["0"]["timestamp"] = timeClient.getEpochTime();
-      historicalData[year][month][day]["0"]["date"] = timeStr;
-      historicalData[year][month][day]["0"]["meterId"] = impulseMeterId;
+      // historicalData[year][month][day][0]["thing_pin"] = String(iotWebConf.getThingName()) + "_" + impulsePin;
+      historicalData[year][month][day][0]["name"] = impulseMeterName;
+      historicalData[year][month][day][0]["id"] = impulseMeterId;
+      historicalData[year][month][day][0]["impulse"] = impulseCounted;
+      historicalData[year][month][day][0]["value"] = float(impulseCounted) * impulseMultiplierParam.value();
+      historicalData[year][month][day][0]["unit"] = impulseUnit;
+      historicalData[year][month][day][0]["timestamp"] = timeClient.getEpochTime();
+      historicalData[year][month][day][0]["date"] = timeStr;
       Serial.print("Storing historical data: ");
       serializeJsonPretty(historicalData, jsonString);
       Serial.println(jsonString);
 
       serializeJson(historicalData, jsonString);
       preferences.putString("historicalData", jsonString);
-      mqttPublish(MQTT_PUB_OUT1_HIST, jsonString.c_str(), false);
+      mqttPublish(MQTT_PUB_HIST, jsonString.c_str(), false, false);
     }
   }
 }
+
+// // Funktion zur Authentifizierung
+// bool isAuthenticated()
+// {
+//   if (server.authenticate(http_username, http_password))
+//   {
+//     return true;
+//   }
+//   server.requestAuthentication();
+//   return false;
+// }
+
+// // Funktion zur Behandlung der Root-Seite
+// void handleRoot()
+// {
+//   if (!isAuthenticated())
+//   {
+//     return;
+//   }
+//   server.send(200, "text/html", "<h1>Geschützte Seite</h1><p>Willkommen!</p>");
+// }
+
+// TODO: Sicherheitsabfrage mit JavaScript ergänzen
+void handleDeleteHistoricalData()
+{
+  if (!server.authenticate("admin", iotWebConf.getApPasswordParameter()->valueBuffer))
+  {
+    return server.requestAuthentication();
+  }
+
+  historicalData.clear();
+  changeNvsMode(false);
+  preferences.remove("historicalData");
+  changeNvsMode(true);
+
+  String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
+  s += iotWebConf.getHtmlFormatProvider()->getStyle();
+  s += "<title>Warmwater Recirculation Pump</title>";
+  s += iotWebConf.getHtmlFormatProvider()->getHeadEnd();
+  s += "Historical data deleted!";
+  s += iotWebConf.getHtmlFormatProvider()->getEnd();
+  server.send(200, "text/html", s);
+}
 /* #endregion*/
 
-/* #region Wifi Manager*/
+/* #region ESP*/
 String verbose_print_reset_reason(esp_reset_reason_t reason)
 {
   switch (reason)
@@ -328,31 +384,7 @@ void startCrash()
   server.send(200, "text/html", s);
   startCrashTimer(5);
 }
-
-void handleCoreDump()
-{
-  server.sendHeader("Content-Type", "application/octet-stream");
-  server.sendHeader("Content-Disposition", "attachment; filename=coredump.bin");
-  server.sendHeader("Connection", "close");
-  server.send(200, "application/octet-stream", readCoreDump());
-}
-
-void handleDeleteCoreDump()
-{
-  String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
-  s += iotWebConf.getHtmlFormatProvider()->getStyle();
-  s += "<title>Warmwater Recirculation Pump</title>";
-  s += iotWebConf.getHtmlFormatProvider()->getHeadEnd();
-  if (esp_core_dump_image_erase() == ESP_OK)
-  {
-    s += "Core dump deleted";
-    s += "<button type=\"button\" onclick=\"javascript:history.back()\">Back</button>";
-  }
-  else
-    s += "No core dump found!";
-  s += iotWebConf.getHtmlFormatProvider()->getEnd();
-  server.send(200, "text/html", s);
-}
+/* #endregion*/
 
 /* #region Wifi Manager */
 void handleRoot()
@@ -414,14 +446,20 @@ void handleRoot()
   s += float(impulseCounted) * impulseMultiplierParam.value();
   s += " ";
   s += impulseUnit;
-  s += "<p>meter: ";
+  s += "<p>meter id: ";
   s += impulseMeterId;
+  s += "<p>name: ";
+  s += impulseMeterName;
   uptime::calculateUptime();
   sprintf(tempStr, "%04u Tage %02u:%02u:%02u", uptime::getDays(), uptime::getHours(), uptime::getMinutes(), uptime::getSeconds());
   s += "<p>uptime: " + String(tempStr);
   s += "<p>last reset reason: " + verbose_print_reset_reason(esp_reset_reason());
   s += "<p>heartbeat: ";
   s += getHeartbeatMessage();
+  s += "<p>";
+  s += "<button onclick=\"if (confirm('Delete history?')) { window.location.href = '/deleteHistoricalData'; }\">delete historical data</button>";
+  // s += "<p>";
+  // s += "GPIOs set to sensor: " + String(impulsePin) + ", led: " + String(impulseLed);
   s += "<p>";
   switch (esp_core_dump_image_check())
   {
@@ -444,9 +482,35 @@ void handleRoot()
   server.send(200, "text/html", s);
 }
 
+void handleCoreDump()
+{
+  server.sendHeader("Content-Type", "application/octet-stream");
+  server.sendHeader("Content-Disposition", "attachment; filename=coredump.bin");
+  server.sendHeader("Connection", "close");
+  server.send(200, "application/octet-stream", readCoreDump());
+}
+
+void handleDeleteCoreDump()
+{
+  String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
+  s += iotWebConf.getHtmlFormatProvider()->getStyle();
+  s += "<title>Warmwater Recirculation Pump</title>";
+  s += iotWebConf.getHtmlFormatProvider()->getHeadEnd();
+  if (esp_core_dump_image_erase() == ESP_OK)
+  {
+    s += "Core dump deleted";
+    s += "<button type=\"button\" onclick=\"javascript:history.back()\">Back</button>";
+  }
+  else
+    s += "No core dump found!";
+  s += iotWebConf.getHtmlFormatProvider()->getEnd();
+  server.send(200, "text/html", s);
+}
+
 void configSaved()
 {
   // check if Wifi configration has changed - if yes, restart
+  changeNvsMode(false);
   if (preferences.isKey("apPassword"))
   {
     if (strcmp(iotWebConf.getApPasswordParameter()->valueBuffer, preferences.getString("apPassword").c_str()) != 0)
@@ -470,7 +534,7 @@ void configSaved()
   else
     needReset = true;
 
-  // TOOD: Funktioniert mit apPasswort noch nicht immer....
+  // TODO: Funktioniert mit apPasswort noch nicht immer....
   Serial.println(iotWebConf.getApPasswordParameter()->getLength() > 0);
   if (iotWebConf.getApPasswordParameter()->getLength() > 0)
     preferences.putString("apPassword", String(iotWebConf.getApPasswordParameter()->valueBuffer));
@@ -487,11 +551,17 @@ void configSaved()
   saveImpulseToNvs();
   changeNvsMode(true);
 
+  if (impulsePin != atoi(impulsePinStr))
+    needReset = true;
+
+  if (impulseLed != atoi(impulseLedStr))
+    needReset = true;
+
   // restart MQTT connection
   mqttClient.disconnect();
   if (mqttUser != "")
     mqttClient.setCredentials(mqttUser, mqttPassword);
-  mqttClient.setServer(mqttServer, MQTT_PORT);
+  mqttClient.setServer(mqttServer, atoi(mqttPortStr));
   Serial.println("MQTT ready again");
   connectToMqtt();
 
@@ -521,9 +591,27 @@ bool formValidator(iotwebconf::WebRequestWrapper *webRequestWrapper)
     mqttTopicPathParam.errorMessage = "The topicpath must end with a slash: /";
     valid = false;
   }
+  if (!webRequestWrapper->arg(impulseMeterIdParam.getId()).length() > 0)
+  {
+    impulseMeterIdParam.errorMessage = "The meter id must be set!";
+    valid = false;
+  }
+  if (!webRequestWrapper->arg(impulsePinParam.getId()).toInt() > 0)
+  {
+    impulsePinParam.errorMessage = "GPIO number must be greater than 0!";
+    valid = false;
+  }
+
+  if (!webRequestWrapper->arg(impulseLedParam.getId()).toInt() > 0)
+  {
+    impulseLedParam.errorMessage = "GPIO number must be greater than 0!";
+    valid = false;
+  }
+
   return valid;
 }
 /* #endregion */
+
 /* #region NTP*/
 void setTimezone(String timezone)
 {
@@ -552,6 +640,7 @@ void updateTime()
   }
 }
 /* #endregion */
+
 /* #region MQTT/Status data preparation*/
 bool getMqttActive()
 {
@@ -615,7 +704,43 @@ String getHistoricalDataJson()
   serializeJson(historicalData, jsonString);
   return jsonString;
 }
+
+String getActualDataJson()
+{
+  JsonDocument object;
+  String jsonString;
+
+  // object["thing_pin"] = String(iotWebConf.getThingName()) + "_" + impulsePin; // generate a simple unique ID
+  object["name"] = impulseMeterName;
+  object["id"] = impulseMeterId;
+  object["impulse"] = impulseCounted;
+  object["value"] = float(impulseCounted) * impulseMultiplierParam.value();
+  object["unit"] = impulseUnit;
+  serializeJson(object, jsonString);
+  return jsonString;
+}
+
+void mqttPublishUptime()
+{
+  char msg_out[20];
+  uptime::calculateUptime();
+  sprintf(msg_out, "%04u %s %02u:%02u:%02u", uptime::getDays(), "days", uptime::getHours(), uptime::getMinutes(), uptime::getSeconds());
+  // Serial.println(msg_out);
+  mqttPublish(MQTT_PUB_INFO, msg_out, false, false);
+}
+
+void mqttSendTopics(bool mqttInit)
+{
+  // TODO: mit dem Timestamp funktioniert die Erkennung auf Änderung nicht mehr. Hier noch einbauen.
+  if (timeClient.isTimeSet())
+    mqttPublish(String(String(MQTT_PUB_ACT) + "/" + String(impulseMeterId)).c_str(), getActualDataJson().c_str(), mqttInit, true);
+  if (!historicalData.isNull())
+    mqttPublish(MQTT_PUB_HIST, getHistoricalDataJson().c_str(), mqttInit, false);
+  mqttPublish(MQTT_PUB_SYSINFO, getSysinfoJson().c_str(), mqttInit, true);
+}
+
 /* #endregion*/
+
 /* #region connection handling*/
 void connectToMqtt()
 {
@@ -644,12 +769,12 @@ void onMqttConnect(bool sessionPresent)
   Serial.println("Connected to MQTT.");
   Serial.print("Session present: ");
   Serial.println(sessionPresent);
-  mqttPublish(MQTT_PUB_STATUS, "Online", true);
-  mqttPublish(MQTT_PUB_WIFI, getWifiJson().c_str(), true);
+  mqttPublish(MQTT_PUB_STATUS, "Online", true, false);
+  mqttPublish(MQTT_PUB_WIFI, getWifiJson().c_str(), true, true);
   uint16_t packetIdSub;
-  packetIdSub = mqttClient.subscribe((String(mqttTopicPath) + String(MQTT_SUB_CMND_OUT1_IMPULSE)).c_str(), 0);
+  packetIdSub = mqttClient.subscribe((String(mqttTopicPath) + String(MQTT_SUB_CMND_IMPULSE)).c_str(), 0);
   Serial.print("Subscribed to topic: ");
-  Serial.println(String(mqttTopicPath) + String(MQTT_SUB_CMND_OUT1_IMPULSE) + " - " + String(packetIdSub));
+  Serial.println(String(mqttTopicPath) + String(MQTT_SUB_CMND_IMPULSE) + " - " + String(packetIdSub));
   mqttSendTopics(true);
 }
 
@@ -721,40 +846,59 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
   char new_payload[len + 1];
   strncpy(new_payload, payload, len);
   new_payload[len] = '\0';
-  if (String(topic) == (String(mqttTopicPath) + String(MQTT_SUB_CMND_OUT1_IMPULSE)))
+  if (String(topic) == (String(mqttTopicPath) + String(MQTT_SUB_CMND_IMPULSE)))
   {
     Serial.print("MQTT command received to set impulse counter: ");
     Serial.println(new_payload);
-
-    impulseCounted = atoi(new_payload);
-    saveImpulseToNvs();
-    if (timeClient.isTimeSet())
+    JsonDocument object;
+    deserializeJson(object, new_payload);
+    if (!object["impulse"].isNull())
     {
-      heartbeatError = 0;
-      preferences.putULong("heartbeat", timeClient.getEpochTime());
+      impulseCounted = object["impulse"];
+      changeNvsMode(false);
+      saveImpulseToNvs();
+      Serial.print("Impulse set to: ");
+      Serial.println(impulseCounted);
+      if (timeClient.isTimeSet())
+      {
+        heartbeatError = 0;
+        preferences.putULong("heartbeat", timeClient.getEpochTime());
+      }
+      changeNvsMode(true);
     }
   }
 }
 
-void mqttPublish(const char *topic, const char *payload, bool force)
+void mqttPublish(const char *topic, const char *payload, bool force, bool jsonAddTimstamp)
 {
   static std::map<String, String> mqttLastMessage;
   if (getMqttActive())
   {
     String topicStr = String(topic);
     String payloadStr = String(payload);
+    String newPayloadStr = String(payload);
     String tempTopicStr = String(mqttTopicPath) + String(topic);
 
     if (mqttClient.connected())
     {
       if (mqttLastMessage[topicStr] != payloadStr || force)
       {
-        Serial.println("MQTT send: " + tempTopicStr + " = " + payloadStr);
-        if (mqttClient.publish(tempTopicStr.c_str(), 0, true, payload) > 0)
+        if (jsonAddTimstamp && timeClient.isTimeSet())
+        {
+          JsonDocument object;
+          char timeStr[20];
+          strftime(timeStr, 20, "%d.%m.%Y %T", &localTime);
+          deserializeJson(object, payload);
+          object["timestamp"] = timeClient.getEpochTime();
+          object["date"] = timeStr;
+          serializeJson(object, newPayloadStr);
+        }
+        Serial.println("MQTT send: " + tempTopicStr + " = " + newPayloadStr);
+        if (mqttClient.publish(tempTopicStr.c_str(), 0, true, newPayloadStr.c_str()) > 0)
           // TODO: Statt dem String ggf. einen Hash wegspeichern zur Optimierung der Speichernutzung
           mqttLastMessage[topicStr] = payloadStr;
         else
-          Serial.println("MQTT (error) not send: " + tempTopicStr + " = " + payloadStr);
+          Serial.println("MQTT (error) not send: " + tempTopicStr + " = " + newPayloadStr);
       }
     }
     else
@@ -764,33 +908,6 @@ void mqttPublish(const char *topic, const char *payload, bool force)
   }
 }
 /* #endregion*/
-
-void mqttPublishUptime()
-{
-  char msg_out[20];
-  uptime::calculateUptime();
-  sprintf(msg_out, "%04u %s %02u:%02u:%02u", uptime::getDays(), "days", uptime::getHours(), uptime::getMinutes(), uptime::getSeconds());
-  // Serial.println(msg_out);
-  mqttPublish(MQTT_PUB_INFO, msg_out, false);
-}
-
-void mqttSendTopics(bool mqttInit)
-{
-  char msg_out[20];
-  sprintf(msg_out, "%d", impulseCounted);
-  mqttImpulseCounted = impulseCounted;
-  mqttPublish(MQTT_PUB_OUT1_IMPULSE, msg_out, mqttInit);
-  float value = float(impulseCounted) * impulseMultiplierParam.value();
-  sprintf(msg_out, "%.2f", value);
-  mqttPublish(MQTT_PUB_OUT1_VALUE, msg_out, mqttInit);
-  mqttPublish(MQTT_PUB_OUT1_UNIT, impulseUnit, mqttInit);
-  if (!historicalData.isNull())
-    mqttPublish(MQTT_PUB_OUT1_HIST, getHistoricalDataJson().c_str(), mqttInit);
-  mqttPublish(MQTT_PUB_SYSINFO, getSysinfoJson().c_str(), mqttInit);
-
-  if (mqttInit)
-    mqttPublishUptime();
-}
 
 bool onSec10Timer(void *)
 {
@@ -817,7 +934,7 @@ bool onSec10Timer(void *)
 bool onMin5Timer(void *)
 {
   mqttPublishUptime();
-  mqttPublish(MQTT_PUB_WIFI, getWifiJson().c_str(), false);
+  mqttPublish(MQTT_PUB_WIFI, getWifiJson().c_str(), false, true);
   changeNvsMode(false);
   saveImpulseToNvs();
   saveHistoricalData();
@@ -832,9 +949,6 @@ void setup()
   // basic setup
   Serial.begin(115200);
   esp_core_dump_init();
-  pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(IMPULSEPIN, INPUT_PULLUP);
-  digitalWrite(LED_BUILTIN, HIGH);
 
   // WiFi.onEvent(onWifiConnected, ARDUINO_EVENT_WIFI_STA_CONNECTED);
   WiFi.onEvent(onWifiDisconnect, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
@@ -855,14 +969,17 @@ void setup()
   if (preferences.isKey("historicalData"))
   {
     deserializeJson(historicalData, preferences.getString("historicalData"));
-    // Test of deserialization
     Serial.println("Loaded historical data");
+    // Test of deserialization
     // String JsonString;
     // serializeJsonPretty(historicalData, JsonString);
     // Serial.println(JsonString);
   }
   else
     Serial.println("Historical data not found in NVRAM");
+
+  impulseCounted = preferences.getUInt("impulseCounter", 0);
+  nvsImpulseCounted = impulseCounted;
 
   iotWebConf.setupUpdateServer(
       [](const char *updatePath)
@@ -871,17 +988,22 @@ void setup()
       { httpUpdater.updateCredentials(userName, password); });
 
   mqttGroup.addItem(&mqttServerParam);
+  mqttGroup.addItem(&mqttPortParam);
   mqttGroup.addItem(&mqttUserNameParam);
   mqttGroup.addItem(&mqttUserPasswordParam);
+  mqttGroup.addItem(&mqttClientIdParam);
   mqttGroup.addItem(&mqttTopicPathParam);
   iotWebConf.addParameterGroup(&mqttGroup);
   ntpGroup.addItem(&ntpServerParam);
   ntpGroup.addItem(&ntpTimezoneParam);
   iotWebConf.addParameterGroup(&ntpGroup);
+  impulseGroup.addItem(&impulsePinParam);
+  impulseGroup.addItem(&impulseLedParam);
   impulseGroup.addItem(&impulseUnitParam);
   impulseGroup.addItem(&impulseMultiplierParam);
   impulseGroup.addItem(&impulseCountedParam);
   impulseGroup.addItem(&impulseMeterIdParam);
+  impulseGroup.addItem(&impulseMeterNameParam);
   iotWebConf.addParameterGroup(&impulseGroup);
 
   iotWebConf.setConfigSavedCallback(&configSaved);
@@ -920,10 +1042,14 @@ void setup()
   server.on("/coredump", handleCoreDump);
   server.on("/deletecoredump", handleDeleteCoreDump);
   // server.on("/crash", startCrash); // Debugging only
+  server.on("/deleteHistoricalData", handleDeleteHistoricalData);
+  impulsePin = atoi(impulsePinStr);
+  impulseLed = atoi(impulseLedStr);
   Serial.println("Wifi manager ready.");
 
-  // TODO: Set client name optionally via config
-  //  mqttClient.setClientId(iotWebConf.getThingName());
+  // Init MQTT
+  if (!mqttClientId)
+    mqttClient.setClientId(iotWebConf.getThingName());
   strcpy(mqttWillTopic, mqttTopicPath);
   strcat(mqttWillTopic, MQTT_PUB_STATUS);
   mqttClient.setWill(mqttWillTopic, 0, true, "Offline", 7);
@@ -936,7 +1062,7 @@ void setup()
   // TODO: Add SSL connection
   if (mqttUser != "")
     mqttClient.setCredentials(mqttUser, mqttPassword);
-  mqttClient.setServer(mqttServer, MQTT_PORT);
+  mqttClient.setServer(mqttServer, atoi(mqttPortStr));
   Serial.println("MQTT ready");
 
   // configure the timezone
@@ -966,15 +1092,19 @@ void setup()
     else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
   Serial.println("OTA ready");
 
-  impulseCounted = preferences.getUInt("impulseCounter", 0);
-  nvsImpulseCounted = impulseCounted;
   changeNvsMode(true);
   // Timers
   timer.every(10000, onSec10Timer);
   timer.every(300000, onMin5Timer);
-  digitalWrite(LED_BUILTIN, LOW);
+  Serial.println("Timer ready");
 
-  attachInterrupt(digitalPinToInterrupt(IMPULSEPIN), handleImpulseFalling1, FALLING);
+  // PINs
+  pinMode(impulseLed, OUTPUT);
+  digitalWrite(impulseLed, LOW);
+  pinMode(impulsePin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(impulsePin), handleImpulseChanging1, CHANGE);
+  Serial.println("GPIOs set to sensor: " + String(impulsePin) + ", LED: " + String(impulseLed));
+  Serial.println("ISR ready");
 }
 
 void loop()
@@ -983,7 +1113,6 @@ void loop()
   ArduinoOTA.handle();
   updateTime();
   timer.tick();
-  digitalWrite(LED_BUILTIN, !digitalRead(IMPULSEPIN));
   if (needReset)
   {
     Serial.println("Rebooting in 1 second.");
