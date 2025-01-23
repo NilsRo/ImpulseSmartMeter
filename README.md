@@ -13,7 +13,7 @@ There are some projects included tasmota that provided impulse counters but I de
 * build in LED shows reed sensor status
 
 ## [Hardware](docs/schema.pdf)
-* MH-ET Live D1 mini ESP32
+* MH-ET Live D1 mini ESP32 (most other ESP32 dev boards are supported as the GPIOs can be set in the software. 4Mbit NVRAM at least is neccessary.)
 * STL for [case (thingiverse)](https://www.thingiverse.com/thing:4871082)
 * Reedsensor has to be connected to ground and GPIO 27 (can be changed in the constants, every digital GPIO can be used)
 * [sensor case for Pietro Florentini/Samgas meters](docs/Gaszaehler_Halter.stl)
@@ -41,12 +41,13 @@ You can compile your own firmware version or use the firmware provided in the re
 
 ## MQTT JSON content in detail
 
+TODO
+
 ### Publications
 
-
+TODO
 
 ### Subscribtions
 command/set_impulse: {id: <meter id>, impulse: <impulse as int>}
 
-![status page](img/opera_2023-11-27%20212528.png)
-![config page](img/opera_2023-11-27%20212521.png)
+![homescreen](img/homescreen.png)
