@@ -25,23 +25,28 @@ The reed sensor has to be mounted near to the magnet. For Pietro Florentini/Samg
 On first boot the thing opens an Access Point named "Gaszaehler" to provide the setup interface. The interface is still available after the device is connected so you can change everything later. 
 You can compile your own firmware version or use the firmware provided in the releases section.
 
+## Setup
 1. Do the system configuration and set things name (hostname), AP password (if WiFi connection is lost) and WiFi credentials for your network.
-2. MQTT configuration (optional)
+2. MQTT configuration (optional) - SSL/TLS Support will be added on request, actually not supported.
    1. publishes the topics (topicpath as prefix):
-      * "status/<sensor id, actually 0 only>/impulse": actual impulse counted
-      * "status/<sensor id, actually 0 only>/value": actual value consumed
-      * "status/<sensor id, actually 0 only>/unit": unit of the value
-      * "status/<sensor id, actually 0 only>/historic": historical data - end of month
+      * "meters/<meter id>": actual data for the meter
+      * "historic": historical data - end of month for all meters (actually only one is supported)
       * "status/info": some status information
       * "status/status": On-/Offline status of the system
       * "status/sysinfo": system information like heartbeat, last reset reason or MQTT disconnect reason which can be used for device monitoring
       * "status/wifi": status of the WiFi connection with SSID, IP, MAC and RSSI
    2. subscribes to topic:
-      * "command/set_impulse_0": sets the actual impulse count and resets the watchdog like it can be done also from WebGUI (necessary after e.g. a power outage longer than 10 minutes)
+      * "command/set_impulse": sets the actual impulse count and resets the watchdog like it can be done also from WebGUI (necessary after e.g. a power outage longer than 10 minutes)
 3. NTP configuration to get RTC infos for logging (default is fine for german timezone)
 
 ## MQTT JSON content in detail
-TODO
+
+### Publications
+
+
+
+### Subscribtions
+command/set_impulse: {id: <meter id>, impulse: <impulse as int>}
 
 ![status page](img/opera_2023-11-27%20212528.png)
 ![config page](img/opera_2023-11-27%20212521.png)
