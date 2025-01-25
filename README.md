@@ -25,13 +25,19 @@ The reed sensor has to be mounted near to the magnet. For Pietro Florentini/Samg
 On first boot the thing opens an Access Point named "Gaszaehler" to provide the setup interface. The interface is still available after the device is connected so you can change everything later. 
 You can compile your own firmware version or use the firmware provided in the releases section.
 
+The precompiled firmware is compatible with most ESP32 boards as the GPIOs pin could be set during configuration. To upload it you can use esptool.py or [ESP32 Download Tool](https://www.espressif.com/en/support/download/other-tools) provided by espressif. 
+
+This is an example for esptool, the settings can be copied also to the ESP32 Download Tool as it is simply a GUI to flash an ESP32. COM6 has to be changed accordingly to the device serial port.
+
+"python.exe" "esptool.py" --chip esp32 --port "COM6" --baud 460800 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 40m --flash_size 4MB 0x1000 bootloader.bin 0x8000 partitions.bin 0xe000 boot_app0.bin 0x10000 firmware.bin
+
 ## Setup
 1. Do the system configuration and set things name (hostname), AP password (if WiFi connection is lost) and WiFi credentials for your network.
 2. MQTT configuration (optional) - SSL/TLS Support will be added on request, actually not supported.
    1. publishes the topics (topicpath as prefix):
-      * "meters/<meter id>": actual data for the meter
+      * "meters/meter id": actual data for the meter
       * "historic": historical data - end of month for all meters (actually only one is supported)
-      * "status/info": some status information
+      * "status/info": some status text
       * "status/status": On-/Offline status of the system
       * "status/sysinfo": system information like heartbeat, last reset reason or MQTT disconnect reason which can be used for device monitoring
       * "status/wifi": status of the WiFi connection with SSID, IP, MAC and RSSI
@@ -48,6 +54,6 @@ TODO
 TODO
 
 ### Subscribtions
-command/set_impulse: {id: <meter id>, impulse: <impulse as int>}
+command/set_impulse: {id: meter id, impulse: impulse as int}
 
 ![homescreen](img/homescreen.png)
