@@ -5,15 +5,15 @@ There are some projects included tasmota that provided impulse counters but I de
 
 ## Featurelist
 * MQTT integration
-* value calculation and storage
-* Realtime clock for logging
+* value calculation from impulses
+* Realtime clock for logging and end of month history
 * Guided setup to avoid storing WiFi password, etc. in the code
-* NVRAM backup of the actual value
+* NVRAM backup
 * watchdog to monitor if the device was offline longer than 10 minutes
 * build in LED shows reed sensor status
 
 ## [Hardware](docs/schema.pdf)
-* MH-ET Live D1 mini ESP32 (most other ESP32 dev boards are supported as the GPIOs can be set in the software. 4Mbit NVRAM at least is neccessary.)
+* MH-ET Live D1 mini ESP32 (Most other ESP32 dev boards are supported as the GPIOs can be set in the software. 4Mbit NVRAM at least is neccessary.)
 * STL for [case (thingiverse)](https://www.thingiverse.com/thing:4871082)
 * Reedsensor has to be connected to ground and GPIO 27 (can be changed in the constants, every digital GPIO can be used)
 * [sensor case for Pietro Florentini/Samgas meters](docs/Gaszaehler_Halter.stl)
@@ -25,7 +25,7 @@ The reed sensor has to be mounted near to the magnet. For Pietro Florentini/Samg
 On first boot the thing opens an Access Point named "Gaszaehler" to provide the setup interface. The interface is still available after the device is connected so you can change everything later. 
 You can compile your own firmware version or use the firmware provided in the releases section.
 
-The precompiled firmware is compatible with most ESP32 boards as the GPIOs pin could be set during configuration. To upload it you can use esptool.py or [ESP32 Download Tool](https://www.espressif.com/en/support/download/other-tools) provided by espressif. 
+The precompiled firmware is compatible with most ESP32 boards as the GPIOs could be set during configuration. To upload it you can use esptool.py or [ESP32 Download Tool](https://www.espressif.com/en/support/download/other-tools) provided by espressif. 
 
 This is an example for esptool, the settings can be copied also to the ESP32 Download Tool as it is simply a GUI to flash an ESP32. COM6 has to be changed accordingly to the device serial port.
 
@@ -36,13 +36,13 @@ This is an example for esptool, the settings can be copied also to the ESP32 Dow
 2. MQTT configuration (optional) - SSL/TLS Support will be added on request, actually not supported.
    1. publishes the topics (topicpath as prefix):
       * "meters/meter id": actual data for the meter
-      * "historic": historical data - end of month for all meters (actually only one is supported)
+      * "historic": historical data - end of month for all meters (actually only one meter is supported)
       * "status/info": some status text
       * "status/status": On-/Offline status of the system
       * "status/sysinfo": system information like heartbeat, last reset reason or MQTT disconnect reason which can be used for device monitoring
       * "status/wifi": status of the WiFi connection with SSID, IP, MAC and RSSI
    2. subscribes to topic:
-      * "command/set_impulse": sets the actual impulse count and resets the watchdog like it can be done also from WebGUI (necessary after e.g. a power outage longer than 10 minutes)
+      * "command/set_impulse": sets the actual impulse count and resets the watchdog like it can be done also from WebGUI (e.g. after a power outage longer than 10 minutes)
 3. NTP configuration to get RTC infos for logging (default is fine for german timezone)
 
 ## MQTT JSON content in detail
