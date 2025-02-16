@@ -177,7 +177,7 @@ void saveHeartbeatToNvs()
 // TODO: setHistoricalData und Webseite dafür integrieren
 void saveHistoricalData()
 {
-  const char dayOfMonth[3] = "01"; // save every first day of month
+  const int dayOfMonth = 1; // save every first day of month
   char year[5];
   char month[3];
   char day[3];
@@ -186,7 +186,12 @@ void saveHistoricalData()
   itoa(localTime.tm_year + 1900, year, 10);
   itoa(localTime.tm_mon, month, 10);
   itoa(localTime.tm_mday, day, 10);
-  if (timeClient.isTimeSet() && strcmp(day, dayOfMonth) == 0)
+
+  Serial.println("Debugging:");
+  Serial.println(day);
+  Serial.println(dayOfMonth);
+
+  if (timeClient.isTimeSet() && localTime.tm_mday == dayOfMonth)
   {
     if (historicalData[year][month][day].isNull())
     {
@@ -246,11 +251,51 @@ void handleDeleteHistoricalData()
 
   String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
   s += iotWebConf.getHtmlFormatProvider()->getStyle();
-  s += "<title>Warmwater Recirculation Pump</title>";
+  s += "<title>Impulsemeter</title>";
   s += iotWebConf.getHtmlFormatProvider()->getHeadEnd();
-  s += "Historical data deleted!";
+  s += "Historical data deleted! Return to <a href=\"/\">home page</a>.";
   s += iotWebConf.getHtmlFormatProvider()->getEnd();
   server.send(200, "text/html", s);
+}
+
+void handleViewHistoricalData()
+{
+  if (!server.authenticate("admin", iotWebConf.getApPasswordParameter()->valueBuffer))
+  {
+    return server.requestAuthentication();
+  }
+
+  if (server.hasArg("json"))
+  {
+    String jsonString = server.arg("json").c_str();
+    Serial.println("Json: " + jsonString);
+    DeserializationError deserializationError = deserializeJson(historicalData, jsonString);
+    if (deserializationError == DeserializationError::Ok)
+    {
+      changeNvsMode(false);
+      preferences.putString("historicalData", jsonString);
+      changeNvsMode(true);
+      server.send(200, "text/plain", "Historical Json data saved! Return to <a href=\"/\">home page</a>.");
+    }
+    else
+      server.send(200, "text/plain", "Json has errors! Data not saved! Return to <a href=\"/\">home page</a>.");
+  }
+  else
+  {
+    String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
+    String jsonString;
+
+    serializeJsonPretty(historicalData, jsonString);
+
+    s += iotWebConf.getHtmlFormatProvider()->getStyle();
+    s += "<title>Impulsemeter</title>";
+    s += iotWebConf.getHtmlFormatProvider()->getHeadEnd();
+    s += "<form><label for=\"json\">historical data json:</label><p><textarea id=\"json\" name=\"json\" rows=\"40\" cols=\"60\">";
+    s += jsonString;
+    s += "</textarea><p><button type=\"submit\">Save</button><p><button type=\"reset\">Reset</button></form>";
+    s += iotWebConf.getHtmlFormatProvider()->getEnd();
+    server.send(200, "text/html", s);
+  }
 }
 /* #endregion*/
 
@@ -377,7 +422,7 @@ void startCrash()
 {
   String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
   s += iotWebConf.getHtmlFormatProvider()->getStyle();
-  s += "<title>Warmwater Recirculation Pump</title>";
+  s += "<title>Impulsemeter</title>";
   s += iotWebConf.getHtmlFormatProvider()->getHeadEnd();
   s += "Crashing in 5 seconds...!";
   s += iotWebConf.getHtmlFormatProvider()->getEnd();
@@ -458,6 +503,7 @@ void handleRoot()
   s += getHeartbeatMessage();
   s += "<p>";
   s += "<button onclick=\"if (confirm('Delete history?')) { window.location.href = '/deleteHistoricalData'; }\">delete historical data</button>";
+  s += "<p><button onclick=\" window.location.href = '/viewHistoricalData'; \">view historical data</button>";
   // s += "<p>";
   // s += "GPIOs set to sensor: " + String(impulsePin) + ", led: " + String(impulseLed);
   s += "<p>";
@@ -494,7 +540,7 @@ void handleDeleteCoreDump()
 {
   String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
   s += iotWebConf.getHtmlFormatProvider()->getStyle();
-  s += "<title>Warmwater Recirculation Pump</title>";
+  s += "<title>Impulsemeter</title>";
   s += iotWebConf.getHtmlFormatProvider()->getHeadEnd();
   if (esp_core_dump_image_erase() == ESP_OK)
   {
@@ -1043,6 +1089,7 @@ void setup()
   server.on("/deletecoredump", handleDeleteCoreDump);
   // server.on("/crash", startCrash); // Debugging only
   server.on("/deleteHistoricalData", handleDeleteHistoricalData);
+  server.on("/viewHistoricalData", handleViewHistoricalData);
   impulsePin = atoi(impulsePinStr);
   impulseLed = atoi(impulseLedStr);
   Serial.println("Wifi manager ready.");
