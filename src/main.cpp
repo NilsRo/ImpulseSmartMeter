@@ -27,7 +27,7 @@
 // #define nils_length( x ) ( sizeof(x) )
 
 const unsigned int MAX_DOWNTIME = 600;
-const unsigned int DEBOUNCE_DELAY = 200; // Entprelldauer (in Millisekunden)
+const unsigned int DEBOUNCE_DELAY = 400; // Entprelldauer (in Millisekunden)
 
 unsigned long timeDetected = 0;
 unsigned long timeReleased = 0;
@@ -187,10 +187,6 @@ void saveHistoricalData()
   itoa(localTime.tm_mon, month, 10);
   itoa(localTime.tm_mday, day, 10);
 
-  Serial.println("Debugging:");
-  Serial.println(day);
-  Serial.println(dayOfMonth);
-
   if (timeClient.isTimeSet() && localTime.tm_mday == dayOfMonth)
   {
     if (historicalData[year][month][day].isNull())
@@ -236,7 +232,6 @@ void saveHistoricalData()
 //   server.send(200, "text/html", "<h1>Geschützte Seite</h1><p>Willkommen!</p>");
 // }
 
-// TODO: Sicherheitsabfrage mit JavaScript ergänzen
 void handleDeleteHistoricalData()
 {
   if (!server.authenticate("admin", iotWebConf.getApPasswordParameter()->valueBuffer))
@@ -501,6 +496,9 @@ void handleRoot()
   s += "<p>last reset reason: " + verbose_print_reset_reason(esp_reset_reason());
   s += "<p>heartbeat: ";
   s += getHeartbeatMessage();
+  s += " (downtime ";
+  s += downtime;
+  s += "s)";
   s += "<p>";
   s += "<button onclick=\"if (confirm('Delete history?')) { window.location.href = '/deleteHistoricalData'; }\">delete historical data</button>";
   s += "<p><button onclick=\" window.location.href = '/viewHistoricalData'; \">view historical data</button>";
@@ -766,6 +764,11 @@ String getActualDataJson()
   return jsonString;
 }
 
+void mqttPublishInfo(String info)
+{
+  mqttPublish(MQTT_PUB_INFO, info.c_str(), false, false);
+}
+
 void mqttPublishUptime()
 {
   char msg_out[20];
@@ -897,20 +900,28 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
     Serial.print("MQTT command received to set impulse counter: ");
     Serial.println(new_payload);
     JsonDocument object;
-    deserializeJson(object, new_payload);
-    if (!object["impulse"].isNull())
+    if (DeserializationError::Ok == deserializeJson(object, new_payload))
     {
-      impulseCounted = object["impulse"];
-      changeNvsMode(false);
-      saveImpulseToNvs();
-      Serial.print("Impulse set to: ");
-      Serial.println(impulseCounted);
-      if (timeClient.isTimeSet())
+      if (!object["impulse"].isNull())
       {
-        heartbeatError = 0;
-        preferences.putULong("heartbeat", timeClient.getEpochTime());
+        impulseCounted = object["impulse"];
+        changeNvsMode(false);
+        saveImpulseToNvs();
+        Serial.print("Impulse set to: ");
+        Serial.println(impulseCounted);
+        if (timeClient.isTimeSet())
+        {
+          heartbeatError = 0;
+          preferences.putULong("heartbeat", timeClient.getEpochTime());
+        }
+        changeNvsMode(true);
       }
-      changeNvsMode(true);
+    }
+    else
+    {
+      mqttPublishInfo("Deserialization of JsonObject for topic " + String(topic) + " not n´successfull.");
+      Serial.print("Deserialization of JsonObject for topic " + String(topic) + " not n´successfull: ");
+      Serial.println(new_payload);
     }
   }
 }
@@ -963,7 +974,7 @@ bool onSec10Timer(void *)
     Serial.print("heartbeat: ");
     Serial.println(preferences.getULong("heartbeat"));
     downtime = timeClient.getEpochTime() - preferences.getULong("heartbeat") - (millis() / 1000);
-    if (downtime > (MAX_DOWNTIME + (millis() / 1000))) // 10 minutes -default- not running leads into an error message
+    if (downtime > MAX_DOWNTIME)
       heartbeatError = 2;
     else
       heartbeatError = 0;
