@@ -236,7 +236,6 @@ void saveHistoricalData()
 //   server.send(200, "text/html", "<h1>Geschützte Seite</h1><p>Willkommen!</p>");
 // }
 
-// TODO: Sicherheitsabfrage mit JavaScript ergänzen
 void handleDeleteHistoricalData()
 {
   if (!server.authenticate("admin", iotWebConf.getApPasswordParameter()->valueBuffer))
@@ -766,6 +765,11 @@ String getActualDataJson()
   return jsonString;
 }
 
+void mqttPublishInfo(String info)
+{
+  mqttPublish(MQTT_PUB_INFO, info.c_str(), false, false);
+}
+
 void mqttPublishUptime()
 {
   char msg_out[20];
@@ -897,20 +901,28 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
     Serial.print("MQTT command received to set impulse counter: ");
     Serial.println(new_payload);
     JsonDocument object;
-    deserializeJson(object, new_payload);
-    if (!object["impulse"].isNull())
+    if (DeserializationError::Ok == deserializeJson(object, new_payload))
     {
-      impulseCounted = object["impulse"];
-      changeNvsMode(false);
-      saveImpulseToNvs();
-      Serial.print("Impulse set to: ");
-      Serial.println(impulseCounted);
-      if (timeClient.isTimeSet())
+      if (!object["impulse"].isNull())
       {
-        heartbeatError = 0;
-        preferences.putULong("heartbeat", timeClient.getEpochTime());
+        impulseCounted = object["impulse"];
+        changeNvsMode(false);
+        saveImpulseToNvs();
+        Serial.print("Impulse set to: ");
+        Serial.println(impulseCounted);
+        if (timeClient.isTimeSet())
+        {
+          heartbeatError = 0;
+          preferences.putULong("heartbeat", timeClient.getEpochTime());
+        }
+        changeNvsMode(true);
       }
-      changeNvsMode(true);
+    }
+    else
+    {
+      mqttPublishInfo("Deserialization of JsonObject for topic " + String(topic) + " not n´successfull.");
+      Serial.print("Deserialization of JsonObject for topic " + String(topic) + " not n´successfull: ");
+      Serial.println(new_payload);
     }
   }
 }
