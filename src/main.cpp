@@ -115,7 +115,7 @@ int mod(int x, int y)
 /* #endregion */
 
 /* #region  Necessary forward declarations*/
-void setTimezone(String timezone);
+void setTimezone(const char* timezone);
 void connectToMqtt();
 void mqttPublish(const char *topic, const char *payload, bool force, bool jsonAddTimestamp);
 void mqttSendTopics(bool mqttInit);
@@ -174,7 +174,6 @@ void saveHeartbeatToNvs()
   }
 }
 
-// TODO: setHistoricalData und Webseite dafür integrieren
 void saveHistoricalData()
 {
   const int dayOfMonth = 1; // save every first day of month
@@ -214,27 +213,6 @@ void saveHistoricalData()
     }
   }
 }
-
-// // Funktion zur Authentifizierung
-// bool isAuthenticated()
-// {
-//   if (server.authenticate(http_username, http_password))
-//   {
-//     return true;
-//   }
-//   server.requestAuthentication();
-//   return false;
-// }
-
-// // Funktion zur Behandlung der Root-Seite
-// void handleRoot()
-// {
-//   if (!isAuthenticated())
-//   {
-//     return;
-//   }
-//   server.send(200, "text/html", "<h1>Geschützte Seite</h1><p>Willkommen!</p>");
-// }
 
 void handleDeleteHistoricalData()
 {
@@ -658,22 +636,11 @@ bool formValidator(iotwebconf::WebRequestWrapper *webRequestWrapper)
 /* #endregion */
 
 /* #region NTP*/
-void setTimezone(String timezone)
+void setTimezone(const char* timezone)
 {
-  Serial.printf("  Setting Timezone to %s\n", ntpTimezone);
-  setenv("TZ", ntpTimezone, 1); //  Now adjust the TZ.  Clock settings are adjusted to show the new local time
+  Serial.printf("Setting Timezone to %s\n", timezone);
+  setenv("TZ", timezone, 1); //  Now adjust the TZ.  Clock settings are adjusted to show the new local time
   tzset();
-}
-
-void getLocalTime()
-{
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo))
-  {
-    Serial.println("Failed to obtain time 1");
-    return;
-  }
-  localTime = timeinfo;
 }
 
 void updateTime()
@@ -681,7 +648,13 @@ void updateTime()
   if (iotWebConf.getState() == 4)
   {
     timeClient.update();
-    getLocalTime();
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo))
+    {
+      Serial.println("Failed to obtain time 1");
+      return;
+    }
+    localTime = timeinfo;
   }
 }
 /* #endregion */
@@ -966,6 +939,12 @@ void mqttPublish(const char *topic, const char *payload, bool force, bool jsonAd
   }
 }
 /* #endregion*/
+bool onSec1Timer(void *) 
+{
+  updateTime();
+
+  return true;
+}
 
 bool onSec10Timer(void *)
 {
@@ -974,8 +953,8 @@ bool onSec10Timer(void *)
   {
     Serial.print("heartbeat: ");
     Serial.println(preferences.getULong("heartbeat"));
-    downtime = timeClient.getEpochTime() - preferences.getULong("heartbeat") - (millis() / 1000);
-    if (downtime > (MAX_DOWNTIME + (millis() / 1000))) // 10 minutes -default- not running leads into an error message
+    downtime = timeClient.getEpochTime() - preferences.getULong("heartbeat");
+    if (downtime > MAX_DOWNTIME) // 10 minutes downtime leads into an error
       heartbeatError = 2;
     else
       heartbeatError = 0;
@@ -1153,6 +1132,7 @@ void setup()
 
   changeNvsMode(true);
   // Timers
+  timer.every(1000, onSec1Timer);
   timer.every(10000, onSec10Timer);
   timer.every(300000, onMin5Timer);
   Serial.println("Timer ready");
@@ -1170,7 +1150,6 @@ void loop()
 {
   iotWebConf.doLoop();
   ArduinoOTA.handle();
-  updateTime();
   timer.tick();
   if (needReset)
   {
