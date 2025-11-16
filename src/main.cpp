@@ -52,10 +52,10 @@ auto timer = timer_create_default();
 #define MQTT_SUB_CMND_IMPULSE "command/set_impulse"
 #define MQTT_PUB_ACT "meters"
 #define MQTT_PUB_HIST "historic"
-#define MQTT_PUB_INFO "status/info"
-#define MQTT_PUB_SYSINFO "status/sysinfo"
-#define MQTT_PUB_STATUS "status/status"
-#define MQTT_PUB_WIFI "status/wifi"
+#define MQTT_PUB_INFO "log/info"
+#define MQTT_PUB_SYSINFO "log/sysinfo"
+#define MQTT_PUB_STATUS "status"
+#define MQTT_PUB_WIFI "log/wifi"
 AsyncMqttClient mqttClient;
 String mqttDisconnectReason;
 char mqttDisconnectTime[20];
