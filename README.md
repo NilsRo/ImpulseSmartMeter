@@ -37,10 +37,10 @@ This is an example for esptool, the settings can be copied also to the ESP32 Dow
    1. publishes the topics (topicpath as prefix):
       * "meters/meter id": actual data for the meter
       * "historic": historical data - end of month for all meters (actually only one meter is supported)
-      * "status/info": some status text
-      * "status/status": On-/Offline status of the system
-      * "status/sysinfo": system information like heartbeat, last reset reason or MQTT disconnect reason which can be used for device monitoring
-      * "status/wifi": status of the WiFi connection with SSID, IP, MAC and RSSI
+      * "status": On-/Offline status of the system
+      * "log/info": some status text
+      * "log/sysinfo": system information like heartbeat, last reset reason or MQTT disconnect reason which can be used for device monitoring
+      * "log/wifi": status of the WiFi connection with SSID, IP, MAC and RSSI
    2. subscribes to topic:
       * "command/set_impulse": sets the actual impulse count and resets the watchdog like it can be done also from WebGUI (e.g. after a power outage longer than 10 minutes)
 3. NTP configuration to get RTC infos for logging (default is fine for german timezone)

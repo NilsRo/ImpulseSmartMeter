@@ -27,7 +27,7 @@
 // #define nils_length( x ) ( sizeof(x) )
 
 const unsigned int MAX_DOWNTIME = 600;
-const unsigned int DEBOUNCE_DELAY = 500; // Entprelldauer (in Millisekunden)
+const unsigned int DEBOUNCE_DELAY = 400; // Entprelldauer (in Millisekunden)
 
 unsigned long timeDetected = 0;
 unsigned long timeReleased = 0;
@@ -52,10 +52,10 @@ auto timer = timer_create_default();
 #define MQTT_SUB_CMND_IMPULSE "command/set_impulse"
 #define MQTT_PUB_ACT "meters"
 #define MQTT_PUB_HIST "historic"
-#define MQTT_PUB_INFO "status/info"
-#define MQTT_PUB_SYSINFO "status/sysinfo"
-#define MQTT_PUB_STATUS "status/status"
-#define MQTT_PUB_WIFI "status/wifi"
+#define MQTT_PUB_INFO "log/info"
+#define MQTT_PUB_SYSINFO "log/sysinfo"
+#define MQTT_PUB_STATUS "status"
+#define MQTT_PUB_WIFI "log/wifi"
 AsyncMqttClient mqttClient;
 String mqttDisconnectReason;
 char mqttDisconnectTime[20];
@@ -115,7 +115,7 @@ int mod(int x, int y)
 /* #endregion */
 
 /* #region  Necessary forward declarations*/
-void setTimezone(String timezone);
+void setTimezone(const char* timezone);
 void connectToMqtt();
 void mqttPublish(const char *topic, const char *payload, bool force, bool jsonAddTimestamp);
 void mqttSendTopics(bool mqttInit);
@@ -174,7 +174,6 @@ void saveHeartbeatToNvs()
   }
 }
 
-// TODO: setHistoricalData und Webseite dafür integrieren
 void saveHistoricalData()
 {
   const int dayOfMonth = 1; // save every first day of month
@@ -216,28 +215,6 @@ void saveHistoricalData()
   }
 }
 
-// // Funktion zur Authentifizierung
-// bool isAuthenticated()
-// {
-//   if (server.authenticate(http_username, http_password))
-//   {
-//     return true;
-//   }
-//   server.requestAuthentication();
-//   return false;
-// }
-
-// // Funktion zur Behandlung der Root-Seite
-// void handleRoot()
-// {
-//   if (!isAuthenticated())
-//   {
-//     return;
-//   }
-//   server.send(200, "text/html", "<h1>Geschützte Seite</h1><p>Willkommen!</p>");
-// }
-
-// TODO: Sicherheitsabfrage mit JavaScript ergänzen
 void handleDeleteHistoricalData()
 {
   if (!server.authenticate("admin", iotWebConf.getApPasswordParameter()->valueBuffer))
@@ -502,6 +479,9 @@ void handleRoot()
   s += "<p>last reset reason: " + verbose_print_reset_reason(esp_reset_reason());
   s += "<p>heartbeat: ";
   s += getHeartbeatMessage();
+  s += " (downtime ";
+  s += downtime;
+  s += "s)";
   s += "<p>";
   s += "<button onclick=\"if (confirm('Delete history?')) { window.location.href = '/deleteHistoricalData'; }\">delete historical data</button>";
   s += "<p><button onclick=\" window.location.href = '/viewHistoricalData'; \">view historical data</button>";
@@ -660,22 +640,11 @@ bool formValidator(iotwebconf::WebRequestWrapper *webRequestWrapper)
 /* #endregion */
 
 /* #region NTP*/
-void setTimezone(String timezone)
+void setTimezone(const char* timezone)
 {
-  Serial.printf("  Setting Timezone to %s\n", ntpTimezone);
-  setenv("TZ", ntpTimezone, 1); //  Now adjust the TZ.  Clock settings are adjusted to show the new local time
+  Serial.printf("Setting Timezone to %s\n", timezone);
+  setenv("TZ", timezone, 1); //  Now adjust the TZ.  Clock settings are adjusted to show the new local time
   tzset();
-}
-
-void getLocalTime()
-{
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo))
-  {
-    Serial.println("Failed to obtain time 1");
-    return;
-  }
-  localTime = timeinfo;
 }
 
 void updateTime()
@@ -683,7 +652,13 @@ void updateTime()
   if (iotWebConf.getState() == 4)
   {
     timeClient.update();
-    getLocalTime();
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo))
+    {
+      Serial.println("Failed to obtain time 1");
+      return;
+    }
+    localTime = timeinfo;
   }
 }
 /* #endregion */
@@ -765,6 +740,11 @@ String getActualDataJson()
   object["unit"] = impulseUnit;
   serializeJson(object, jsonString);
   return jsonString;
+}
+
+void mqttPublishInfo(String info)
+{
+  mqttPublish(MQTT_PUB_INFO, info.c_str(), false, false);
 }
 
 void mqttPublishUptime()
@@ -898,20 +878,28 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
     Serial.print("MQTT command received to set impulse counter: ");
     Serial.println(new_payload);
     JsonDocument object;
-    deserializeJson(object, new_payload);
-    if (!object["impulse"].isNull())
+    if (DeserializationError::Ok == deserializeJson(object, new_payload))
     {
-      impulseCounted = object["impulse"];
-      changeNvsMode(false);
-      saveImpulseToNvs();
-      Serial.print("Impulse set to: ");
-      Serial.println(impulseCounted);
-      if (timeClient.isTimeSet())
+      if (!object["impulse"].isNull())
       {
-        heartbeatError = 0;
-        preferences.putULong("heartbeat", timeClient.getEpochTime());
+        impulseCounted = object["impulse"];
+        changeNvsMode(false);
+        saveImpulseToNvs();
+        Serial.print("Impulse set to: ");
+        Serial.println(impulseCounted);
+        if (timeClient.isTimeSet())
+        {
+          heartbeatError = 0;
+          preferences.putULong("heartbeat", timeClient.getEpochTime());
+        }
+        changeNvsMode(true);
       }
-      changeNvsMode(true);
+    }
+    else
+    {
+      mqttPublishInfo("Deserialization of JsonObject for topic " + String(topic) + " not n´successfull.");
+      Serial.print("Deserialization of JsonObject for topic " + String(topic) + " not n´successfull: ");
+      Serial.println(new_payload);
     }
   }
 }
@@ -955,6 +943,12 @@ void mqttPublish(const char *topic, const char *payload, bool force, bool jsonAd
   }
 }
 /* #endregion*/
+bool onSec1Timer(void *) 
+{
+  updateTime();
+
+  return true;
+}
 
 bool onSec10Timer(void *)
 {
@@ -964,7 +958,7 @@ bool onSec10Timer(void *)
     Serial.print("heartbeat: ");
     Serial.println(preferences.getULong("heartbeat"));
     downtime = timeClient.getEpochTime() - preferences.getULong("heartbeat") - (millis() / 1000);
-    if (downtime > (MAX_DOWNTIME + (millis() / 1000))) // 10 minutes -default- not running leads into an error message
+    if (downtime > MAX_DOWNTIME)
       heartbeatError = 2;
     else
       heartbeatError = 0;
@@ -1142,6 +1136,7 @@ void setup()
 
   changeNvsMode(true);
   // Timers
+  timer.every(1000, onSec1Timer);
   timer.every(10000, onSec10Timer);
   timer.every(300000, onMin5Timer);
   Serial.println("Timer ready");
@@ -1159,7 +1154,6 @@ void loop()
 {
   iotWebConf.doLoop();
   ArduinoOTA.handle();
-  updateTime();
   timer.tick();
   if (needReset)
   {
