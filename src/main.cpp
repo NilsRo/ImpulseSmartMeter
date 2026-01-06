@@ -27,7 +27,7 @@
 // #define nils_length( x ) ( sizeof(x) )
 
 const unsigned int MAX_DOWNTIME = 600;
-const unsigned int DEBOUNCE_DELAY = 200; // Entprelldauer (in Millisekunden)
+const unsigned int DEBOUNCE_DELAY = 500; // Entprelldauer (in Millisekunden)
 
 unsigned long timeDetected = 0;
 unsigned long timeReleased = 0;
@@ -186,6 +186,7 @@ void saveHistoricalData()
   itoa(localTime.tm_year + 1900, year, 10);
   itoa(localTime.tm_mon, month, 10);
   itoa(localTime.tm_mday, day, 10);
+  month++;
 
   Serial.println("Debugging:");
   Serial.println(day);
