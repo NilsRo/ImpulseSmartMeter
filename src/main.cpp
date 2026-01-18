@@ -183,13 +183,8 @@ void saveHistoricalData()
   String jsonString;
   char timeStr[20];
   itoa(localTime.tm_year + 1900, year, 10);
-  itoa(localTime.tm_mon, month, 10);
+  itoa(localTime.tm_mon + 1, month, 10);
   itoa(localTime.tm_mday, day, 10);
-  month++;
-
-  Serial.println("Debugging:");
-  Serial.println(day);
-  Serial.println(dayOfMonth);
 
   if (timeClient.isTimeSet() && localTime.tm_mday == dayOfMonth)
   {
