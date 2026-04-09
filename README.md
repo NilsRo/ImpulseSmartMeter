@@ -11,6 +11,7 @@ There are some projects included tasmota that provided impulse counters but I de
 * NVRAM backup
 * watchdog to monitor if the device was offline longer than 10 minutes
 * build in LED shows reed sensor status
+* hardend impulse detection via state machine. High and Low Impulse must be present for a specified time set in configuration.
 
 ## [Hardware](docs/schema.pdf)
 * MH-ET Live D1 mini ESP32 (Most other ESP32 dev boards are supported as the GPIOs can be set in the software. 4Mbit NVRAM at least is neccessary.)

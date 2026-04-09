@@ -25,24 +25,42 @@
 #define MQTT_LEN 256
 #define nils_length(x) ((sizeof(x) / sizeof(0 [x])) / ((size_t)(!(sizeof(x) % sizeof(0 [x])))))
 // #define nils_length( x ) ( sizeof(x) )
+// Direkter Zugriff auf ESP32-GPIO-Register
 
 const unsigned int MAX_DOWNTIME = 600;
-const unsigned int DEBOUNCE_DELAY = 400; // Entprelldauer (in Millisekunden)
+#define IMPULSE_PHASE_WIDTH 200000UL
 
-unsigned long timeDetected = 0;
-unsigned long timeReleased = 0;
+volatile uint64_t isrTimestamp = 0;
+volatile bool isrLevel = HIGH;
+volatile bool isrFlag = false;
+
+enum State
+{
+  WAIT_STABLE_HIGH,
+  WAIT_STABLE_LOW
+};
+State state = WAIT_STABLE_HIGH;
+uint64_t lastChangeTime = 0;
+uint64_t lastHighWidth = 0;
+uint64_t lastLowWidth = 0;
+
 unsigned int impulseCounted = 0;
+
 unsigned int mqttImpulseCounted = 0;
 unsigned int nvsImpulseCounted = 0;
 unsigned int impulsePin = GPIO_NUM_27;
 unsigned int impulseLed = GPIO_NUM_2;
+unsigned long impulseMinWidth = 3000000UL;
 char impulsePinStr[3];
 char impulseLedStr[3];
+char impulseMinWidthStr[3];
 bool needReset = false;
 char impulseMeterId[STRING_LEN];
 char impulseMeterName[STRING_LEN];
 byte heartbeatError = 1;
 byte mqttHeartbeatError = 0;
+float impulseMultiplier;
+char impulseMultiplierStr[STRING_LEN];
 char impulseUnit[STRING_LEN];
 long downtime = 0;
 JsonDocument historicalData;
@@ -101,8 +119,10 @@ IotWebConfTextParameter ntpTimezoneParam = IotWebConfTextParameter("timezone", "
 IotWebConfParameterGroup impulseGroup = IotWebConfParameterGroup("impulse", "Impulse");
 IotWebConfNumberParameter impulsePinParam = IotWebConfNumberParameter("impulse sensor (GPIO)", "impulsePin", impulsePinStr, 3, "27");
 IotWebConfNumberParameter impulseLedParam = IotWebConfNumberParameter("impulse LED (GPIO)", "impulseLed", impulseLedStr, 3, "2");
+IotWebConfNumberParameter impulseMinWidthParam = IotWebConfNumberParameter("impulse minimum width (seconds)", "impulseMinWidth", impulseMinWidthStr, 3, "3");
 IotWebConfTextParameter impulseUnitParam = IotWebConfTextParameter("unit", "impulseUnit", impulseUnit, STRING_LEN, "m3");
-iotwebconf::FloatTParameter impulseMultiplierParam = iotwebconf::Builder<iotwebconf::FloatTParameter>("impulseMultiplierParam").label("multiplier").defaultValue(1.0).step(0.01).placeholder("e.g. 23.4").build();
+// iotwebconf::FloatTParameter impulseMultiplierParam = iotwebconf::Builder<iotwebconf::FloatTParameter>("impulseMultiplierParam").label("multiplier").defaultValue(1.0).min(0.001).max(10.0).step(0.001).placeholder("e.g. 23.4").build();
+IotWebConfNumberParameter impulseMultiplierParam = IotWebConfNumberParameter("multiplier", "impulseMultiplier", impulseMultiplierStr, 10, nullptr, "e.g. 23.4", "step='0.001'");
 IotWebConfNumberParameter impulseCountedParam = IotWebConfNumberParameter("impulses counted", "impulseCounted", impulseCountedStr, 11, "0");
 IotWebConfTextParameter impulseMeterIdParam = IotWebConfTextParameter("meter id", "impulseMeterId", impulseMeterId, STRING_LEN);
 IotWebConfTextParameter impulseMeterNameParam = IotWebConfTextParameter("meter name", "impulseMeterName", impulseMeterName, STRING_LEN);
@@ -112,6 +132,12 @@ int mod(int x, int y)
 {
   return x < 0 ? ((x + 1) % y) + y - 1 : x % y;
 }
+
+static inline bool readGpioFast(int pin)
+{
+  return (GPIO.in >> pin) & 0x1;
+}
+
 /* #endregion */
 
 /* #region  Necessary forward declarations*/
@@ -123,18 +149,54 @@ String getHeartbeatMessage();
 /* #endregion */
 
 /* #region ISR */
-void handleImpulseChanging1()
+void IRAM_ATTR isr_impulse_change()
 {
-  if ((millis() - timeDetected) > DEBOUNCE_DELAY)
-  {
-    if (digitalRead(impulsePin) == LOW)
-      impulseCounted++;
-    // Serial.print("Impulse detected: ");
-    // Serial.println(millis() - timeDetected);
-  }
-  digitalWrite(LED_BUILTIN, digitalRead(impulsePin));
-  timeDetected = millis();
+  isrTimestamp = esp_timer_get_time();
+  isrLevel = readGpioFast(impulsePin);
+  isrFlag = true;
 }
+
+void handleImpulseInterrupt()
+{
+  noInterrupts();
+  uint64_t ts = isrTimestamp;
+  bool level = isrLevel;
+  isrFlag = false;
+  interrupts();
+
+  uint64_t phaseDuration = ts - lastChangeTime;
+  lastChangeTime = ts;
+
+  // ignore jitter
+  if (phaseDuration < IMPULSE_PHASE_WIDTH) // TODO: ggf. phaseDuration additiv behandeln beim Jitter, ansonsten geht die Messing von vorne los.
+    return;
+
+  if (level == HIGH)
+    lastLowWidth = phaseDuration;
+  else
+    lastHighWidth = phaseDuration;
+
+  // State-Machine
+  switch (state)
+  {
+
+  case WAIT_STABLE_HIGH:
+    if (lastHighWidth >= impulseMinWidth)
+      state = WAIT_STABLE_LOW;
+    break;
+
+  case WAIT_STABLE_LOW:
+    if (lastLowWidth >= impulseMinWidth)
+    {
+      // Nur FALLING zählt → level == LOW bedeutet FALLING
+      if (level == LOW)
+        impulseCounted++;
+      state = WAIT_STABLE_HIGH;
+    }
+    break;
+  }
+}
+
 /* #endregion*/
 
 /* #region NVS handling*/
@@ -195,7 +257,7 @@ void saveHistoricalData()
       historicalData[year][month][day][0]["name"] = impulseMeterName;
       historicalData[year][month][day][0]["id"] = impulseMeterId;
       historicalData[year][month][day][0]["impulse"] = impulseCounted;
-      historicalData[year][month][day][0]["value"] = float(impulseCounted) * impulseMultiplierParam.value();
+      historicalData[year][month][day][0]["value"] = float(impulseCounted) * impulseMultiplier;
       historicalData[year][month][day][0]["unit"] = impulseUnit;
       historicalData[year][month][day][0]["timestamp"] = timeClient.getEpochTime();
       historicalData[year][month][day][0]["date"] = timeStr;
@@ -460,8 +522,11 @@ void handleRoot()
   s += "<legend>Status</legend>";
   s += "<p>impulse counter: ";
   s += impulseCounted;
+  s += " (PIN state: ";
+  s += readGpioFast(impulsePin);
+  s += ")";
   s += "<p>consumption: ";
-  s += float(impulseCounted) * impulseMultiplierParam.value();
+  s += float(impulseCounted) * impulseMultiplier;
   s += " ";
   s += impulseUnit;
   s += "<p>meter id: ";
@@ -569,9 +634,12 @@ void configSaved()
     preferences.putULong("heartbeat", timeClient.getEpochTime());
   }
 
+  impulseMultiplier = atoff(impulseMultiplierStr);
   impulseCounted = atoi(impulseCountedStr);
   saveImpulseToNvs();
   changeNvsMode(true);
+
+  impulseMinWidth = atoi(impulseMinWidthStr) * 1000000;
 
   if (impulsePin != atoi(impulsePinStr))
     needReset = true;
@@ -731,7 +799,7 @@ String getActualDataJson()
   object["name"] = impulseMeterName;
   object["id"] = impulseMeterId;
   object["impulse"] = impulseCounted;
-  object["value"] = float(impulseCounted) * impulseMultiplierParam.value();
+  object["value"] = float(impulseCounted) * impulseMultiplier;
   object["unit"] = impulseUnit;
   serializeJson(object, jsonString);
   return jsonString;
@@ -1035,6 +1103,7 @@ void setup()
   iotWebConf.addParameterGroup(&ntpGroup);
   impulseGroup.addItem(&impulsePinParam);
   impulseGroup.addItem(&impulseLedParam);
+  impulseGroup.addItem(&impulseMinWidthParam);
   impulseGroup.addItem(&impulseUnitParam);
   impulseGroup.addItem(&impulseMultiplierParam);
   impulseGroup.addItem(&impulseCountedParam);
@@ -1082,6 +1151,8 @@ void setup()
   server.on("/viewHistoricalData", handleViewHistoricalData);
   impulsePin = atoi(impulsePinStr);
   impulseLed = atoi(impulseLedStr);
+  impulseMultiplier = atoff(impulseMultiplierStr);
+  impulseMinWidth = atoi(impulseMinWidthStr) * 1000000;
   Serial.println("Wifi manager ready.");
 
   // Init MQTT
@@ -1140,7 +1211,7 @@ void setup()
   pinMode(impulseLed, OUTPUT);
   digitalWrite(impulseLed, LOW);
   pinMode(impulsePin, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(impulsePin), handleImpulseChanging1, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(impulsePin), isr_impulse_change, CHANGE);
   Serial.println("GPIOs set to sensor: " + String(impulsePin) + ", LED: " + String(impulseLed));
   Serial.println("ISR ready");
 }
@@ -1150,6 +1221,10 @@ void loop()
   iotWebConf.doLoop();
   ArduinoOTA.handle();
   timer.tick();
+
+  if (isrFlag)
+    handleImpulseInterrupt();
+
   if (needReset)
   {
     Serial.println("Rebooting in 1 second.");
