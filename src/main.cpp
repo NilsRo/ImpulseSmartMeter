@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <esp_core_dump.h>
 #include <nvs.h>
+#include <esp_ota_ops.h>
 
 #define STRING_LEN 128
 #define DNS_LEN 254
@@ -194,6 +195,120 @@ void handleImpulseInterrupt()
 
 /* #endregion*/
 
+/* #region coredump */
+String verbose_print_reset_reason(esp_reset_reason_t reason)
+{
+  switch (reason)
+  {
+  case ESP_RST_UNKNOWN:
+    return (" Reset reason can not be determined");
+  case ESP_RST_POWERON:
+    return ("Reset due to power-on event");
+  case ESP_RST_EXT:
+    return ("Reset by external pin (not applicable for ESP32)");
+  case ESP_RST_SW:
+    return ("Software reset via esp_restart");
+  case ESP_RST_PANIC:
+    return ("Software reset due to exception/panic");
+  case ESP_RST_INT_WDT:
+    return ("Reset (software or hardware) due to interrupt watchdog");
+  case ESP_RST_TASK_WDT:
+    return ("Reset due to task watchdog");
+  case ESP_RST_WDT:
+    return ("Reset due to other watchdogs");
+  case ESP_RST_DEEPSLEEP:
+    return ("Reset after exiting deep sleep mode");
+  case ESP_RST_BROWNOUT:
+    return ("Brownout reset (software or hardware)");
+  case ESP_RST_SDIO:
+    return ("Reset over SDIO");
+  default:
+    return ("NO_MEAN");
+  }
+}
+
+void crash_me_hard()
+{
+  // provoke crash through writing to a nullpointer
+  volatile uint32_t *aPtr = (uint32_t *)0x00000000;
+  *aPtr = 0x1234567; // goodnight
+}
+
+void startCrashTimer(int secs)
+{
+  for (int i = 0; i <= secs; i++)
+  {
+    printf("Crashing in %d seconds..\n", secs - i);
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+  }
+  printf("Crashing..\n");
+  vTaskDelay(1000 / portTICK_PERIOD_MS);
+  crash_me_hard();
+}
+
+void startCrash()
+{
+  String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
+  s += iotWebConf.getHtmlFormatProvider()->getStyle();
+  s += "<title>Impulsemeter</title>";
+  s += iotWebConf.getHtmlFormatProvider()->getHeadEnd();
+  s += "Crashing in 5 seconds...!";
+  s += iotWebConf.getHtmlFormatProvider()->getEnd();
+  server.send(200, "text/html", s);
+  startCrashTimer(5);
+}
+/* #endregion*/
+
+/* #region watchdog */
+void handleCrashCounter()
+{
+  // Reset-Gründe prüfen
+  esp_reset_reason_t reason = esp_reset_reason();
+  bool isCrash =
+      reason == ESP_RST_TASK_WDT ||
+      reason == ESP_RST_WDT ||
+      reason == ESP_RST_PANIC ||
+      reason == ESP_RST_BROWNOUT;
+
+  Preferences prefs;
+  prefs.begin("sys", false);
+  int crashCounter = prefs.getInt("crashCounter", 0);
+
+  if (crashCounter >= 10)
+  {
+    Serial.printf("Device has crashed %d times in a row. Initiating failover to backup partition.", crashCounter);
+    // clear persisted counter before switching partition to avoid replay loops
+    prefs.putInt("crashCounter", 0);
+    prefs.end();
+
+    const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
+    esp_ota_set_boot_partition(next);
+    esp_restart();
+  }
+
+  if (isCrash)
+  {
+    // Increment persisted counter so it survives panics
+    crashCounter++;
+    prefs.putInt("crashCounter", crashCounter);
+    Serial.printf("Reset reason: %s, persisted crashCounter: %d", verbose_print_reset_reason(reason).c_str(), crashCounter);
+  }
+  else if (reason == ESP_RST_SW)
+  {
+    // Software reset: preserve persisted counter
+    Serial.printf("Software reset, preserved persisted crashCounter: %d", crashCounter);
+  }
+  else
+  {
+    // Normal boot -> clear persisted counter
+    crashCounter = 0;
+    prefs.putInt("crashCounter", crashCounter);
+    Serial.printf("Normal boot, cleared persisted crashCounter");
+  }
+  prefs.end();
+}
+/* #endregion */
+
 /* #region NVS handling*/
 void changeNvsMode(bool readOnly)
 {
@@ -326,70 +441,6 @@ void handleViewHistoricalData()
     s += iotWebConf.getHtmlFormatProvider()->getEnd();
     server.send(200, "text/html", s);
   }
-}
-/* #endregion*/
-
-/* #region ESP*/
-String verbose_print_reset_reason(esp_reset_reason_t reason)
-{
-  switch (reason)
-  {
-  case ESP_RST_UNKNOWN:
-    return (" Reset reason can not be determined");
-  case ESP_RST_POWERON:
-    return ("Reset due to power-on event");
-  case ESP_RST_EXT:
-    return ("Reset by external pin (not applicable for ESP32)");
-  case ESP_RST_SW:
-    return ("Software reset via esp_restart");
-  case ESP_RST_PANIC:
-    return ("Software reset due to exception/panic");
-  case ESP_RST_INT_WDT:
-    return ("Reset (software or hardware) due to interrupt watchdog");
-  case ESP_RST_TASK_WDT:
-    return ("Reset due to task watchdog");
-  case ESP_RST_WDT:
-    return ("Reset due to other watchdogs");
-  case ESP_RST_DEEPSLEEP:
-    return ("Reset after exiting deep sleep mode");
-  case ESP_RST_BROWNOUT:
-    return ("Brownout reset (software or hardware)");
-  case ESP_RST_SDIO:
-    return ("Reset over SDIO");
-  default:
-    return ("NO_MEAN");
-  }
-}
-
-void crash_me_hard()
-{
-  // provoke crash through writing to a nullpointer
-  volatile uint32_t *aPtr = (uint32_t *)0x00000000;
-  *aPtr = 0x1234567; // goodnight
-}
-
-void startCrashTimer(int secs)
-{
-  for (int i = 0; i <= secs; i++)
-  {
-    printf("Crashing in %d seconds..\n", secs - i);
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-  }
-  printf("Crashing..\n");
-  vTaskDelay(1000 / portTICK_PERIOD_MS);
-  crash_me_hard();
-}
-
-void startCrash()
-{
-  String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
-  s += iotWebConf.getHtmlFormatProvider()->getStyle();
-  s += "<title>Impulsemeter</title>";
-  s += iotWebConf.getHtmlFormatProvider()->getHeadEnd();
-  s += "Crashing in 5 seconds...!";
-  s += iotWebConf.getHtmlFormatProvider()->getEnd();
-  server.send(200, "text/html", s);
-  startCrashTimer(5);
 }
 /* #endregion*/
 
@@ -938,6 +989,7 @@ void setup()
 {
   // basic setup
   Serial.begin(115200);
+  handleCrashCounter();
 
   // WiFi.onEvent(onWifiConnected, ARDUINO_EVENT_WIFI_STA_CONNECTED);
   WiFi.onEvent(onWifiDisconnect, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
@@ -1097,6 +1149,9 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(impulsePin), isr_impulse_change, CHANGE);
   Serial.println("GPIOs set to sensor: " + String(impulsePin) + ", LED: " + String(impulseLed));
   Serial.println("ISR ready");
+
+  // Firmware als gültig markieren
+  esp_ota_mark_app_valid_cancel_rollback();
 }
 
 void loop()
