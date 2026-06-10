@@ -28,7 +28,6 @@
 // Direkter Zugriff auf ESP32-GPIO-Register
 
 const unsigned int MAX_DOWNTIME = 600;
-#define IMPULSE_PHASE_WIDTH 200000UL
 
 volatile uint64_t isrTimestamp = 0;
 volatile bool isrLevel = HIGH;
@@ -50,7 +49,7 @@ unsigned int mqttImpulseCounted = 0;
 unsigned int nvsImpulseCounted = 0;
 unsigned int impulsePin = GPIO_NUM_27;
 unsigned int impulseLed = GPIO_NUM_2;
-unsigned long impulseMinWidth = 3000000UL;
+unsigned long impulseMinWidth = 1000000UL;
 char impulsePinStr[3];
 char impulseLedStr[3];
 char impulseMinWidthStr[3];
@@ -166,11 +165,7 @@ void handleImpulseInterrupt()
 
   uint64_t phaseDuration = ts - lastChangeTime;
   lastChangeTime = ts;
-
-  // ignore jitter
-  if (phaseDuration < IMPULSE_PHASE_WIDTH) // TODO: ggf. phaseDuration additiv behandeln beim Jitter, ansonsten geht die Messing von vorne los.
-    return;
-
+  
   if (level == HIGH)
     lastLowWidth = phaseDuration;
   else
