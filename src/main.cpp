@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <driver/gpio.h>
 #include <Ticker.h>
 #include <arduino-timer.h>
 #include <AsyncMqttClient.h>
@@ -134,7 +135,7 @@ int mod(int x, int y)
 
 static inline bool readGpioFast(int pin)
 {
-  return (GPIO.in >> pin) & 0x1;
+  return gpio_get_level(static_cast<gpio_num_t>(pin));
 }
 
 /* #endregion */
@@ -184,8 +185,7 @@ void handleImpulseInterrupt()
     if (lastLowWidth >= impulseMinWidth)
     {
       // Nur FALLING zählt → level == LOW bedeutet FALLING
-      if (level == LOW)
-        impulseCounted++;
+      impulseCounted++;
       state = WAIT_STABLE_HIGH;
     }
     break;
@@ -361,74 +361,6 @@ String verbose_print_reset_reason(esp_reset_reason_t reason)
   }
 }
 
-bool checkCoreDump()
-{
-  size_t size = 0;
-  size_t address = 0;
-  if (esp_core_dump_image_get(&address, &size) == ESP_OK)
-  {
-    const esp_partition_t *pt = NULL;
-    pt = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, "coredump");
-    if (pt != NULL)
-      return true;
-    else
-      return false;
-  }
-  else
-    return false;
-}
-
-String readCoreDump()
-{
-  size_t size = 0;
-  size_t address = 0;
-  if (esp_core_dump_image_get(&address, &size) == ESP_OK)
-  {
-    const esp_partition_t *pt = NULL;
-    pt = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, "coredump");
-
-    if (pt != NULL)
-    {
-      uint8_t bf[256];
-      char str_dst[640];
-      int16_t toRead;
-      String return_str;
-
-      for (int16_t i = 0; i < (size / 256) + 1; i++)
-      {
-        strcpy(str_dst, "");
-        toRead = (size - i * 256) > 256 ? 256 : (size - i * 256);
-
-        esp_err_t er = esp_partition_read(pt, i * 256, bf, toRead);
-        if (er != ESP_OK)
-        {
-          Serial.printf("FAIL [%x]\n", er);
-          break;
-        }
-
-        for (int16_t j = 0; j < 256; j++)
-        {
-          char str_tmp[3];
-
-          sprintf(str_tmp, "%02x", bf[j]);
-          strcat(str_dst, str_tmp);
-        }
-
-        return_str += str_dst;
-      }
-      return return_str;
-    }
-    else
-    {
-      return "Partition NULL";
-    }
-  }
-  else
-  {
-    return "esp_core_dump_image_get() FAIL";
-  }
-}
-
 void crash_me_hard()
 {
   // provoke crash through writing to a nullpointer
@@ -541,50 +473,10 @@ void handleRoot()
   s += "<button onclick=\"if (confirm('Delete history?')) { window.location.href = '/deleteHistoricalData'; }\">delete historical data</button>";
   s += "<p><button onclick=\" window.location.href = '/viewHistoricalData'; \">view historical data</button>";
   // s += "<p>";
-  // s += "GPIOs set to sensor: " + String(impulsePin) + ", led: " + String(impulseLed);
-  s += "<p>";
-  switch (esp_core_dump_image_check())
-  {
-  case ESP_OK:
-    s += "<a href=/coredump>core dump found</a> - <a href=/deletecoredump>delete core dump</a>";
-    break;
-  case ESP_ERR_NOT_FOUND:
-    s += "no core dump found";
-    break;
-  case ESP_ERR_INVALID_SIZE:
-    s += "core dump with invalid size - <a href=/deletecoredump>delete core dump</a>";
-    break;
-  case ESP_ERR_INVALID_CRC:
-    s += "core dump with invalid CRC - <a href=/deletecoredump>delete core dump</a>";
-  }
+  // s += "GPIOs set to sensor: " + String(impulsePin) + ", led: " + String(impulseLed);  
   s += "</fieldset>";
 
   s += "<p>Go to <a href='config'>Configuration</a>";
-  s += iotWebConf.getHtmlFormatProvider()->getEnd();
-  server.send(200, "text/html", s);
-}
-
-void handleCoreDump()
-{
-  server.sendHeader("Content-Type", "application/octet-stream");
-  server.sendHeader("Content-Disposition", "attachment; filename=coredump.bin");
-  server.sendHeader("Connection", "close");
-  server.send(200, "application/octet-stream", readCoreDump());
-}
-
-void handleDeleteCoreDump()
-{
-  String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
-  s += iotWebConf.getHtmlFormatProvider()->getStyle();
-  s += "<title>Impulsemeter</title>";
-  s += iotWebConf.getHtmlFormatProvider()->getHeadEnd();
-  if (esp_core_dump_image_erase() == ESP_OK)
-  {
-    s += "Core dump deleted";
-    s += "<button type=\"button\" onclick=\"javascript:history.back()\">Back</button>";
-  }
-  else
-    s += "No core dump found!";
   s += iotWebConf.getHtmlFormatProvider()->getEnd();
   server.send(200, "text/html", s);
 }
@@ -765,7 +657,6 @@ String getSysinfoJson()
   object["heartbeat"]["downtime"] = downtime; // downtime in seconds
   object["sys"]["reset_reason"] = esp_reset_reason();
   object["sys"]["reset_reason_msg"] = verbose_print_reset_reason(esp_reset_reason());
-  object["sys"]["core_dump"] = esp_core_dump_image_check();
   // object["system"]["heap_free"] = esp_get_free_internal_heap_size();    // in bytes
   object["sys"]["heap_min_free"] = esp_get_minimum_free_heap_size(); // in bytes
   object["sys"]["nvs_entries_pct"] = nvs_stats.used_entries / nvs_stats.total_entries * 100;
@@ -1047,7 +938,6 @@ void setup()
 {
   // basic setup
   Serial.begin(115200);
-  esp_core_dump_init();
 
   // WiFi.onEvent(onWifiConnected, ARDUINO_EVENT_WIFI_STA_CONNECTED);
   WiFi.onEvent(onWifiDisconnect, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
@@ -1139,8 +1029,6 @@ void setup()
               iotWebConf.handleConfig(); });
   server.onNotFound([]()
                     { iotWebConf.handleNotFound(); });
-  server.on("/coredump", handleCoreDump);
-  server.on("/deletecoredump", handleDeleteCoreDump);
   // server.on("/crash", startCrash); // Debugging only
   server.on("/deleteHistoricalData", handleDeleteHistoricalData);
   server.on("/viewHistoricalData", handleViewHistoricalData);
