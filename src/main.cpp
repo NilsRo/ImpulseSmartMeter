@@ -27,8 +27,6 @@
 #define MQTT_LEN 256
 #define nils_length(x) ((sizeof(x) / sizeof(0 [x])) / ((size_t)(!(sizeof(x) % sizeof(0 [x])))))
 // #define nils_length( x ) ( sizeof(x) )
-// Direkter Zugriff auf ESP32-GPIO-Register
-
 const unsigned int MAX_DOWNTIME = 600;
 
 volatile uint64_t isrTimestamp = 0;
@@ -41,17 +39,19 @@ enum State
   WAIT_STABLE_LOW
 };
 State state = WAIT_STABLE_HIGH;
-uint64_t lastChangeTime = 0;
-uint64_t lastHighWidth = 0;
-uint64_t lastLowWidth = 0;
+uint64_t lastStableChange = 0; // Zeitpunkt der letzten stabilen Flanke
+uint64_t candidateStart = 0;   // Beginn einer potenziellen Flanke
+bool candidateActive = false;  // Ob wir gerade eine Flanke beobachten
+bool lastStableLevel = LOW;   // Letzter stabiler Pegel
+bool newStableLevel = LOW;    // Neuer stabiler Pegel
+bool lastCandidateLevel = LOW; // Letzter Pegel während Candidate-Phase
 
-unsigned int impulseCounted = 0;
-
-unsigned int mqttImpulseCounted = 0;
-unsigned int nvsImpulseCounted = 0;
 unsigned int impulsePin = GPIO_NUM_27;
 unsigned int impulseLed = GPIO_NUM_2;
 unsigned long impulseMinWidth = 1000000UL;
+unsigned int impulseCounted = 0;
+unsigned int mqttImpulseCounted = 0;
+unsigned int nvsImpulseCounted = 0;
 char impulsePinStr[3];
 char impulseLedStr[3];
 char impulseMinWidthStr[3];
@@ -165,34 +165,54 @@ void handleImpulseInterrupt()
   isrFlag = false;
   interrupts();
 
-  uint64_t phaseDuration = ts - lastChangeTime;
-  lastChangeTime = ts;
-  
-  if (level == HIGH)
-    lastLowWidth = phaseDuration;
-  else
-    lastHighWidth = phaseDuration;
+  // --- 1. Candidate starten ---
+  if (!candidateActive)
+  {
+    candidateActive = true;
+    candidateStart = ts;
+    lastCandidateLevel = level;
+    return;
+  }
 
-  // State-Machine
+  // --- 2. Wenn Pegel während Candidate wieder wechselt → Candidate verwerfen ---
+  if (level != lastCandidateLevel)
+  {
+    // Pegel ist zurückgesprungen → Jitter → Candidate ungültig
+    candidateActive = false;
+    return; // Nächste ISR startet neuen Candidate
+  }
+
+  // --- 3. Candidate-Dauer prüfen ---
+  uint64_t candidateDuration = ts - candidateStart;
+
+  if (candidateDuration < impulseMinWidth)
+  {
+    // Noch nicht stabil → weiter beobachten
+    return;
+  }
+
+  // --- 4. State-Machine ---
   switch (state)
   {
-
   case WAIT_STABLE_HIGH:
-    if (lastHighWidth >= impulseMinWidth)
+    if (newStableLevel == HIGH)
+    {
       state = WAIT_STABLE_LOW;
-      Serial.printf("Stable HIGH detected. Width: %" PRIu64 " ms\n", lastHighWidth / 1000);
+      Serial.printf("Stable HIGH detected. Width: %" PRIu64 " ms\n", candidateDuration / 1000);
+    }
     break;
 
   case WAIT_STABLE_LOW:
-    if (lastLowWidth >= impulseMinWidth)
+    if (newStableLevel == LOW)
     {
-      // Nur FALLING zählt → level == LOW bedeutet FALLING
-      impulseCounted++;
+      impulseCounted++; // FALLING erkannt
       state = WAIT_STABLE_HIGH;
-      Serial.printf("Stable LOW detected. Impulse Counted: %u - Width: %" PRIu64 " ms\n", impulseCounted, lastLowWidth / 1000);
+      Serial.printf("Stable LOW detected. Impulse Counted: %u - Width: %" PRIu64 " ms\n", impulseCounted, candidateDuration / 1000);
     }
     break;
   }
+
+  lastStableLevel = newStableLevel;
 }
 
 /* #endregion*/
