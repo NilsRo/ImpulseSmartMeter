@@ -180,6 +180,7 @@ void handleImpulseInterrupt()
   case WAIT_STABLE_HIGH:
     if (lastHighWidth >= impulseMinWidth)
       state = WAIT_STABLE_LOW;
+      Serial.printf("Stable HIGH detected. Width: %" PRIu64 " ms\n", lastHighWidth / 1000);
     break;
 
   case WAIT_STABLE_LOW:
@@ -188,6 +189,7 @@ void handleImpulseInterrupt()
       // Nur FALLING zählt → level == LOW bedeutet FALLING
       impulseCounted++;
       state = WAIT_STABLE_HIGH;
+      Serial.printf("Stable LOW detected. Impulse Counted: %u - Width: %" PRIu64 " ms\n", impulseCounted, lastLowWidth / 1000);
     }
     break;
   }
