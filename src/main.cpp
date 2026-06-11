@@ -141,7 +141,7 @@ static inline bool readGpioFast(int pin)
 
 /* #endregion */
 
-/* #region  Necessary forward declarations*/
+/* #region  Necessary forward declarations */
 void setTimezone(const char* timezone);
 void connectToMqtt();
 void mqttPublish(const char *topic, const char *payload, bool force, bool jsonAddTimestamp);
@@ -309,7 +309,7 @@ void handleCrashCounter()
 }
 /* #endregion */
 
-/* #region NVS handling*/
+/* #region NVS handling */
 void changeNvsMode(bool readOnly)
 {
   if (nvsStatus)
@@ -640,7 +640,7 @@ bool formValidator(iotwebconf::WebRequestWrapper *webRequestWrapper)
 }
 /* #endregion */
 
-/* #region NTP*/
+/* #region NTP */
 void setTimezone(const char* timezone)
 {
   Serial.printf("Setting Timezone to %s\n", timezone);
@@ -664,7 +664,7 @@ void updateTime()
 }
 /* #endregion */
 
-/* #region MQTT/Status data preparation*/
+/* #region MQTT */
 bool getMqttActive()
 {
   return String(mqttServer).length() > 0;
@@ -768,7 +768,7 @@ void mqttSendTopics(bool mqttInit)
 
 /* #endregion*/
 
-/* #region connection handling*/
+/* #region connection handling */
 void connectToMqtt()
 {
   if (strlen(mqttServer) > 0)
@@ -943,6 +943,8 @@ void mqttPublish(const char *topic, const char *payload, bool force, bool jsonAd
   }
 }
 /* #endregion*/
+
+/* #region Timers */
 bool onSec1Timer(void *) 
 {
   updateTime();
@@ -984,6 +986,7 @@ bool onMin5Timer(void *)
 
   return true;
 }
+/* #endregion */
 
 void setup()
 {
