@@ -1140,6 +1140,7 @@ void setup()
     else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
     else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
     else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
+  ArduinoOTA.setPassword(iotWebConf.getApPasswordParameter()->valueBuffer);
   Serial.println("OTA ready");
 
   changeNvsMode(true);
