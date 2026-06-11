@@ -517,6 +517,9 @@ void handleRoot()
   sprintf(tempStr, "%04u Tage %02u:%02u:%02u", uptime::getDays(), uptime::getHours(), uptime::getMinutes(), uptime::getSeconds());
   s += "<p>uptime: " + String(tempStr);
   s += "<p>last reset reason: " + verbose_print_reset_reason(esp_reset_reason());
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
+  s += "<p>Firmware: running  " + String(running->label) + " - OTA updates " + String(next->label) + "</p>";
   s += "<p>heartbeat: ";
   s += getHeartbeatMessage();
   s += " (downtime ";
@@ -525,8 +528,7 @@ void handleRoot()
   s += "<p>";
   s += "<button onclick=\"if (confirm('Delete history?')) { window.location.href = '/deleteHistoricalData'; }\">delete historical data</button>";
   s += "<p><button onclick=\" window.location.href = '/viewHistoricalData'; \">view historical data</button>";
-  // s += "<p>";
-  // s += "GPIOs set to sensor: " + String(impulsePin) + ", led: " + String(impulseLed);  
+  
   s += "</fieldset>";
 
   s += "<p>Go to <a href='config'>Configuration</a>";
